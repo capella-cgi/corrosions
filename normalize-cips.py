@@ -4,12 +4,12 @@ import os
 import glob
 import sys, argparse
 import pandas as pd
-from typing import Any, List, Tuple, Dict
+from typing import Any
 
 NORMALIZE_DIR = os.path.join(os.getcwd(), "normalize")
 
 
-def validate_column(columns: List[str]) -> Tuple[bool, List[str]]:
+def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
     """Validate columns.
 
     Args:
@@ -20,7 +20,7 @@ def validate_column(columns: List[str]) -> Tuple[bool, List[str]]:
         list[str]: list of column names.
     """
 
-    missing_columns: List[str] = []
+    missing_columns: list[str] = []
 
     columns_validated = [
         "Data No",
@@ -42,7 +42,7 @@ def validate_column(columns: List[str]) -> Tuple[bool, List[str]]:
     return True, missing_columns
 
 
-def worksheets(file: str) -> List[str]:
+def worksheets(file: str) -> list[str]:
     """Extract worksheets from a file.
 
     Args:
@@ -56,17 +56,15 @@ def worksheets(file: str) -> List[str]:
         return sheets
 
 
-def get_df(file: str) -> pd.DataFrame:
+def transform_df(df: pd.DataFrame) -> pd.DataFrame:
     """Extract data from a file.
 
     Args:
-        file (str): path to file.
+        df (pd.DataFramae): data frame.
 
     Returns:
         pd.DataFrame: data extracted.
     """
-    df = pd.read_excel(file)
-
     if "Off Voltage" in df.columns:
         # iccp - impress current cathodic protection
         df = df[
@@ -136,20 +134,20 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
     return radius * c
 
 
-def normalize_file(
-    file: str, normalize_filename: str, sheet_name: str = "Sheet1"
+def normalize(
+    df: pd.DataFrame, normalize_filename: str, sheet_name: str = "Sheet1"
 ) -> str:
     """Normalize a file.
 
     Args:
-        file (str): path to file.
+        df (pd.DataFrame): data frame.
         normalize_filename (str): filename to normalize.
         sheet_name (str): sheet name.
 
     Returns:
         str: normalized file.
     """
-    df = get_df(file)
+    df = transform_df(df)
 
     df["condition"] = df["Voltage"].apply(lambda x: condition(x))
     df["voltage_inverse"] = df["Voltage"] * -1
@@ -183,20 +181,21 @@ def normalize_file(
     return normalize_filename
 
 
-def process_file(
-    file: str, sheet_name: str = "Sheet1", overwrite: bool = False
-) -> Dict[str, Any]:
+def process_df(
+    df: pd.DataFrame, filename: str, sheet_name: str = "Sheet1", overwrite: bool = False
+) -> dict[str, Any]:
     """Process a file.
 
     Args:
-        file (str): path to file.
+        df (pd.DataFrame): path to file
+        filename (str): filename to normalize.
         sheet_name (str): sheet name.
         overwrite (bool): overwrite existing file.
 
     Returns:
         dict[str, Any]: processed file.
     """
-    basename = os.path.basename(file).split(".")[0]
+    basename = os.path.basename(filename).split(".")[0]
     basename = f"{basename}__{sheet_name}.xlsx"
 
     os.makedirs(NORMALIZE_DIR, exist_ok=True)
@@ -214,14 +213,14 @@ def process_file(
         return {
             "success": True,
             "message": "File normalized",
-            "file": normalize_file(file, normalize_filename, sheet_name=sheet_name),
+            "file": normalize(df, normalize_filename, sheet_name=sheet_name),
             "sheet": sheet_name,
         }
     except Exception as e:
         return {
             "success": False,
             "message": str(e),
-            "file": file,
+            "file": filename,
             "sheet": None,
         }
 
@@ -234,19 +233,20 @@ def main(file_or_dir: str, overwrite: bool = False, verbose: bool = False):
         files.append(file_or_dir)
 
     if os.path.isdir(file_or_dir):
-        files = glob.glob(
-            os.path.join(r"D:\Projects\extract-kml\DATA IDDA24\Data CIPS", "*.xlsx")
-        )
+        files = glob.glob(os.path.join(file_or_dir, "*.xlsx"))
 
     if len(files) > 0:
         for file in files:
             sheets = worksheets(file)
             dfs = pd.read_excel(file, sheet_name=None)
             for sheet in sheets:
-                columns = dfs[sheet].columns.tolist()
+                df = dfs[sheet]
+                columns = df.columns.tolist()
                 ok, missing_columns = validate_column(columns)
                 if ok:
-                    result = process_file(file, sheet_name=sheet, overwrite=overwrite)
+                    result = process_df(
+                        df, filename=file, sheet_name=sheet, overwrite=overwrite
+                    )
                     results.append(result)
                 else:
                     if verbose:
@@ -275,11 +275,13 @@ if __name__ == "__main__":
     _results = main(_file, overwrite=_overwrite, verbose=_verbose)
 
     if len(_results) == 0:
-        _results = [{
-            "success": False,
-            "message": "File not found",
-            "file": _file,
-        }]
+        _results = [
+            {
+                "success": False,
+                "message": "File not found",
+                "file": _file,
+            }
+        ]
         print(json.dumps(_results))
         sys.exit(1)
 
