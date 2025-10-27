@@ -225,7 +225,7 @@ def process_df(
         }
 
 
-def main(file_or_dir: str, overwrite: bool = False, verbose: bool = False):
+def main(file_or_dir: str, overwrite: bool = False):
     files = []
     results = []
 
@@ -249,10 +249,14 @@ def main(file_or_dir: str, overwrite: bool = False, verbose: bool = False):
                     )
                     results.append(result)
                 else:
-                    if verbose:
-                        print(
-                            f"{ok}. {file}. Sheet: {sheet}. Missing columns: {missing_columns}"
-                        )
+                    results.append(
+                        {
+                            "success": False,
+                            "message": f"Sheet: {sheet}. Missing columns: {missing_columns}",
+                            "file": file,
+                            "sheet": None,
+                        }
+                    )
 
     return results
 
@@ -263,16 +267,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "-o", "--overwrite", help="Overwrite existing files", action="store_true"
     )
-    parser.add_argument(
-        "-v", "--verbose", help="Verbose information", action="store_true"
-    )
 
     args = parser.parse_args()
     _file = args.file
     _overwrite = args.overwrite
-    _verbose = args.verbose
 
-    _results = main(_file, overwrite=_overwrite, verbose=_verbose)
+    _results = main(_file, overwrite=_overwrite)
 
     if len(_results) == 0:
         _results = [
