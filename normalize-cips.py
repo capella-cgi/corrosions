@@ -4,12 +4,12 @@ import os
 import glob
 import sys, argparse
 import pandas as pd
-from typing import Any
+from typing import Any, List, Tuple, Dict
 
 NORMALIZE_DIR = os.path.join(os.getcwd(), "normalize")
 
 
-def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
+def validate_column(columns: List[str]) -> Tuple[bool, List[str]]:
     """Validate columns.
 
     Args:
@@ -20,7 +20,7 @@ def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
         list[str]: list of column names.
     """
 
-    missing_columns: list[str] = []
+    missing_columns: List[str] = []
 
     columns_validated = [
         "Data No",
@@ -42,7 +42,7 @@ def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
     return True, missing_columns
 
 
-def worksheets(file: str) -> list[str]:
+def worksheets(file: str) -> List[str]:
     """Extract worksheets from a file.
 
     Args:
@@ -118,7 +118,7 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
     Returns:
         float: distance between two points.
     """
-    R = 6371000
+    radius = 6371000
 
     # convert degrees to radians
     phi1 = math.radians(lat1)
@@ -133,7 +133,7 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
     )
     c = 2 * math.asin(math.sqrt(a))
 
-    return R * c
+    return radius * c
 
 
 def normalize_file(
@@ -185,7 +185,7 @@ def normalize_file(
 
 def process_file(
     file: str, sheet_name: str = "Sheet1", overwrite: bool = False
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Process a file.
 
     Args:
