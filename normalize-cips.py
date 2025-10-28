@@ -5,6 +5,7 @@ import glob
 import sys, argparse
 import pandas as pd
 from typing import Any
+from slugify import slugify
 
 NORMALIZE_DIR = os.path.join(os.getcwd(), "normalize")
 
@@ -73,6 +74,7 @@ def transform_df(df: pd.DataFrame) -> pd.DataFrame:
                 "Off Voltage",
                 "Latitude",
                 "Longitude",
+                "Comment",
                 "DCP/Feature/DCVG Anomaly",
             ]
         ].copy(deep=True)
@@ -82,7 +84,14 @@ def transform_df(df: pd.DataFrame) -> pd.DataFrame:
 
     # sacp - sacrificial anode catodhic protection
     df = df[
-        ["Data No", "Voltage", "Latitude", "Longitude", "DCP/Feature/DCVG Anomaly"]
+        [
+            "Data No",
+            "Voltage",
+            "Latitude",
+            "Longitude",
+            "Comment",
+            "DCP/Feature/DCVG Anomaly",
+        ]
     ].copy(deep=True)
     df["protection"] = "SACP"
     return df
@@ -175,7 +184,12 @@ def normalize(
         df.loc[index, "Distance"] = distance
         df.loc[index, "Real Distance"] = distance + df.loc[index - 1, "Real Distance"]
 
-    df.set_index("Data No", inplace=True)
+    new_columns = []
+    for column in df.columns:
+        new_columns.append(slugify(column, separator="_"))
+
+    df.columns = new_columns
+    df.set_index("data_no", inplace=True)
     df.to_excel(normalize_filename, sheet_name=sheet_name, index=True)
 
     return normalize_filename
@@ -195,8 +209,14 @@ def process_df(
     Returns:
         dict[str, Any]: processed file.
     """
-    basename = os.path.basename(filename).split(".")[0]
-    basename = f"{basename}__{sheet_name}.xlsx"
+    basename = os.path.basename(filename).split(".x")[0]
+    basename = f"{basename}__{sheet_name}"
+    basename = f"{slugify(basename)}.xlsx"
+
+    if basename[0:4] != "cips":
+        basename = f"cips_{basename}"
+
+    print(basename)
 
     os.makedirs(NORMALIZE_DIR, exist_ok=True)
     normalize_filename = os.path.join(NORMALIZE_DIR, basename)
