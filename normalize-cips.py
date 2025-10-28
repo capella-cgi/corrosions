@@ -144,7 +144,7 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
 
 
 def normalize(
-    df: pd.DataFrame, normalize_filename: str, sheet_name: str = "Sheet1"
+    df: pd.DataFrame, normalize_filename: str, sheet_name: str = "Sheet1", as_json: bool = False
 ) -> str:
     """Normalize a file.
 
@@ -192,11 +192,15 @@ def normalize(
     df.set_index("data_no", inplace=True)
     df.to_excel(normalize_filename, sheet_name=sheet_name, index=True)
 
+    if as_json:
+        json_filename = normalize_filename.replace(".xlsx", ".json")
+        df.to_json(json_filename, orient="records")
+
     return normalize_filename
 
 
 def process_df(
-    df: pd.DataFrame, filename: str, sheet_name: str = "Sheet1", overwrite: bool = False
+    df: pd.DataFrame, filename: str, sheet_name: str = "Sheet1", as_json: bool = False, overwrite: bool = False
 ) -> dict[str, Any]:
     """Process a file.
 
@@ -216,8 +220,6 @@ def process_df(
     if basename[0:4] != "cips":
         basename = f"cips_{basename}"
 
-    print(basename)
-
     os.makedirs(NORMALIZE_DIR, exist_ok=True)
     normalize_filename = os.path.join(NORMALIZE_DIR, basename)
 
@@ -233,7 +235,7 @@ def process_df(
         return {
             "success": True,
             "message": "File normalized",
-            "file": normalize(df, normalize_filename, sheet_name=sheet_name),
+            "file": normalize(df, normalize_filename, sheet_name=sheet_name, as_json=as_json),
             "sheet": sheet_name,
         }
     except Exception as e:
@@ -245,7 +247,7 @@ def process_df(
         }
 
 
-def main(file_or_dir: str, overwrite: bool = False):
+def main(file_or_dir: str, overwrite: bool = False, as_json: bool = False):
     files = []
     results = []
 
@@ -265,7 +267,7 @@ def main(file_or_dir: str, overwrite: bool = False):
                 ok, missing_columns = validate_column(columns)
                 if ok:
                     result = process_df(
-                        df, filename=file, sheet_name=sheet, overwrite=overwrite
+                        df, filename=file, sheet_name=sheet, as_json=as_json, overwrite=overwrite
                     )
                     results.append(result)
                 else:
@@ -287,12 +289,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "-o", "--overwrite", help="Overwrite existing files", action="store_true"
     )
+    parser.add_argument(
+        "-j", "--json", help="Output also as JSON", action="store_true"
+    )
 
     args = parser.parse_args()
     _file = args.file
     _overwrite = args.overwrite
+    _json = args.json
 
-    _results = main(_file, overwrite=_overwrite)
+    _results = main(_file, overwrite=_overwrite, as_json=_json)
 
     if len(_results) == 0:
         _results = [

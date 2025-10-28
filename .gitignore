@@ -2,3 +2,4 @@
 /.uv_cache
 /.venv
 *.xlsx
+*.json
