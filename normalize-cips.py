@@ -1,13 +1,17 @@
+import argparse
+import glob
 import json
 import math
 import os
-import glob
-import sys, argparse
+import sys
+from typing import Any, Optional
+
 import pandas as pd
-from typing import Any
 from slugify import slugify
 
 NORMALIZE_DIR = os.path.join(os.getcwd(), "normalize")
+EXCEL_DIR = os.path.join(NORMALIZE_DIR, "excel")
+JSON_DIR = os.path.join(NORMALIZE_DIR, "json")
 
 
 def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
@@ -144,14 +148,18 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
 
 
 def normalize(
-    df: pd.DataFrame, normalize_filename: str, sheet_name: str = "Sheet1", as_json: bool = False
+    df: pd.DataFrame,
+    excel_filepath: str,
+    sheet_name: str = "Sheet1",
+    json_filepath: Optional[str] = None,
 ) -> str:
     """Normalize a file.
 
     Args:
         df (pd.DataFrame): data frame.
-        normalize_filename (str): filename to normalize.
+        excel_filepath (str): filename to normalize.
         sheet_name (str): sheet name.
+        json_filepath (str): json file path.
 
     Returns:
         str: normalized file.
@@ -182,7 +190,9 @@ def normalize(
 
         distance = calculate_distance(lat_1, lon_1, lat_2, lon_2)
         df.loc[index, "Distance"] = distance
-        df.loc[index, "Real Distance"] = distance + df.loc[index - 1, "Real Distance"]
+        df.loc[index, "Real Distance"] = (
+            distance + df.loc[index - 1, "Real Distance"]
+        )
 
     new_columns = []
     for column in df.columns:
@@ -190,17 +200,21 @@ def normalize(
 
     df.columns = new_columns
     df.set_index("data_no", inplace=True)
-    df.to_excel(normalize_filename, sheet_name=sheet_name, index=True)
+    df.to_excel(excel_filepath, sheet_name=sheet_name, index=True)
 
-    if as_json:
-        json_filename = normalize_filename.replace(".xlsx", ".json")
-        df.to_json(json_filename, orient="records")
+    if json_filepath:
+        os.makedirs(JSON_DIR, exist_ok=True)
+        df.to_json(json_filepath, orient="records")
 
-    return normalize_filename
+    return excel_filepath
 
 
 def process_df(
-    df: pd.DataFrame, filename: str, sheet_name: str = "Sheet1", as_json: bool = False, overwrite: bool = False
+    df: pd.DataFrame,
+    filename: str,
+    sheet_name: str = "Sheet1",
+    as_json: bool = False,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     """Process a file.
 
@@ -208,6 +222,7 @@ def process_df(
         df (pd.DataFrame): path to file
         filename (str): filename to normalize.
         sheet_name (str): sheet name.
+        as_json (bool): whether to return as json.
         overwrite (bool): overwrite existing file.
 
     Returns:
@@ -215,19 +230,24 @@ def process_df(
     """
     basename = os.path.basename(filename).split(".x")[0]
     basename = f"{basename}__{sheet_name}"
-    basename = f"{slugify(basename)}.xlsx"
 
     if basename[0:4] != "cips":
         basename = f"cips_{basename}"
 
-    os.makedirs(NORMALIZE_DIR, exist_ok=True)
-    normalize_filename = os.path.join(NORMALIZE_DIR, basename)
+    os.makedirs(EXCEL_DIR, exist_ok=True)
+    excel_filepath = os.path.join(EXCEL_DIR, f"{slugify(basename)}.xlsx")
+    json_filepath = (
+        os.path.join(JSON_DIR, f"{slugify(basename)}.json")
+        if as_json
+        else None
+    )
 
-    if os.path.exists(normalize_filename) and not overwrite:
+    if os.path.exists(excel_filepath) and not overwrite:
         return {
             "success": True,
             "message": "File already normalized",
-            "file": normalize_filename,
+            "excel": excel_filepath,
+            "json": json_filepath,
             "sheet": sheet_name,
         }
 
@@ -235,14 +255,21 @@ def process_df(
         return {
             "success": True,
             "message": "File normalized",
-            "file": normalize(df, normalize_filename, sheet_name=sheet_name, as_json=as_json),
+            "excel": normalize(
+                df,
+                excel_filepath,
+                sheet_name=sheet_name,
+                json_filepath=json_filepath,
+            ),
+            "json": json_filepath,
             "sheet": sheet_name,
         }
     except Exception as e:
         return {
             "success": False,
             "message": str(e),
-            "file": filename,
+            "excel": filename,
+            "json": json_filepath,
             "sheet": None,
         }
 
@@ -267,7 +294,11 @@ def main(file_or_dir: str, overwrite: bool = False, as_json: bool = False):
                 ok, missing_columns = validate_column(columns)
                 if ok:
                     result = process_df(
-                        df, filename=file, sheet_name=sheet, as_json=as_json, overwrite=overwrite
+                        df,
+                        filename=file,
+                        sheet_name=sheet,
+                        as_json=as_json,
+                        overwrite=overwrite,
                     )
                     results.append(result)
                 else:
@@ -275,7 +306,7 @@ def main(file_or_dir: str, overwrite: bool = False, as_json: bool = False):
                         {
                             "success": False,
                             "message": f"Sheet: {sheet}. Missing columns: {missing_columns}",
-                            "file": file,
+                            "excel": file,
                             "sheet": None,
                         }
                     )
@@ -283,17 +314,37 @@ def main(file_or_dir: str, overwrite: bool = False, as_json: bool = False):
     return results
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-f", "--file", help="File to normalize", type=str)
-    parser.add_argument(
-        "-o", "--overwrite", help="Overwrite existing files", action="store_true"
+def args_parser():
+    parser = argparse.ArgumentParser(
+        prog="CIPS Excel normalizer",
+        description="Normalize all CIPS Excel sheets.",
     )
     parser.add_argument(
-        "-j", "--json", help="Output also as JSON", action="store_true"
+        "-f",
+        "--file",
+        help="File to normalize",
+        type=str,
+    )
+    parser.add_argument(
+        "-o",
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing files",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output also as JSON",
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = args_parser()
     _file = args.file
     _overwrite = args.overwrite
     _json = args.json
@@ -305,7 +356,7 @@ if __name__ == "__main__":
             {
                 "success": False,
                 "message": "File not found",
-                "file": _file,
+                "excel": _file,
             }
         ]
         print(json.dumps(_results))
