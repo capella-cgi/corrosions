@@ -60,3 +60,51 @@ def calculate_distance(lat1, lon1, lat2, lon2) -> float:
     c = 2 * math.asin(math.sqrt(a))
 
     return radius * c
+
+
+def get_basename(
+    filename: str,
+    sheet_name: str,
+    prefix: str = "cips",
+) -> str:
+    """Extract basename from filename.
+
+    Args:
+        filename (str): filename.
+        sheet_name (str): sheet name.
+        prefix (str): prefix.
+
+    Returns:
+        str: basename of filename.
+    """
+    _basename = os.path.basename(filename).split(".x")[0]
+    _basename = f"{_basename}__{sheet_name}"
+
+    if _basename[0 : len(prefix)].lower() != prefix:
+        _basename = f"{prefix}_{_basename}"
+
+    return _basename
+
+
+def sequential_file(sheet_names: list[str]) -> str | None:
+    """Check if sheet name called Sequential File exists.
+
+    Args:
+        sheet_names (list[str]): sheet names.
+
+    Returns:
+        str | None: sequential file name.
+    """
+    if len(sheet_names) == 1:
+        return sheet_names[0]
+
+    if "Sequential File" in sheet_names:
+        return "Sequential File"
+
+    if "Sequential Files" in sheet_names:
+        return "Sequential Files"
+
+    if "Sheet1" in sheet_names:
+        return "Sheet1"
+
+    return None

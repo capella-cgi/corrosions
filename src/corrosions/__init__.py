@@ -4,6 +4,7 @@
 # Third party imports
 from importlib.metadata import version
 from .cips import CIPS
+from .pcm import PCM
 
 __version__ = version("corrosions")
 __author__ = "Martanto"

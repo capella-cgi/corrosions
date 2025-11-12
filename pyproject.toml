@@ -18,6 +18,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pip>=25.3",
     "python-slugify>=8.0.4",
+    "xlsxwriter>=3.2.9",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",

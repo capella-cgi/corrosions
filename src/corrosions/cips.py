@@ -1,8 +1,6 @@
-from slugify import slugify
-import os
 import glob
 import pandas as pd
-from typing import List, Any, Optional
+from typing import Self, Any, Optional
 from .utils import *
 from .const import *
 
@@ -11,21 +9,24 @@ class CIPS:
     def __init__(
         self,
         file_or_dir: str,
-        output_dir: str = None,
         overwrite: bool = False,
         verbose: bool = False,
     ):
         self.file_or_dir = file_or_dir
         self.overwrite = overwrite
-        self.output_dir = os.getcwd() or output_dir
-        self.excel_dir = "excel"
-        self.json_dir = "json"
+        self.prefix = "cips"
+        self.excel_dir = CIPS_EXCEL_DIR
+        self.json_dir = CIPS_JSON_DIR
         self.results = []
 
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.excel_dir, exist_ok=True)
-        os.makedirs(self.json_dir, exist_ok=True)
+        self.COLUMNS_VALIDATED = [
+            "Data No",
+            "Latitude",
+            "Longitude",
+            "DCP/Feature/DCVG Anomaly",
+        ]
 
+        self.check_sequential_file = False
         self.verbose = verbose
 
     @property
@@ -39,8 +40,7 @@ class CIPS:
 
         return files
 
-    @staticmethod
-    def validate_column(columns: list[str]) -> tuple[bool, list[str]]:
+    def validate_column(self, columns: list[str]) -> tuple[bool, list[str]]:
         """Validate columns.
 
         Args:
@@ -53,14 +53,7 @@ class CIPS:
 
         missing_columns: list[str] = []
 
-        columns_validated = [
-            "Data No",
-            "Latitude",
-            "Longitude",
-            "DCP/Feature/DCVG Anomaly",
-        ]
-
-        for column_validated in columns_validated:
+        for column_validated in self.COLUMNS_VALIDATED:
             if column_validated not in columns:
                 missing_columns.append(column_validated)
 
@@ -98,7 +91,7 @@ class CIPS:
             df.rename(columns={"Off Voltage": "Voltage"}, inplace=True)
             return df
 
-        # sacp - sacrificial anode catodhic protection
+        # sacp - sacrificial anode cathodic protection
         df = df[
             [
                 "Data No",
@@ -185,7 +178,6 @@ class CIPS:
         df.to_excel(excel_filepath, sheet_name=sheet_name, index=True)
 
         if json_filepath:
-            os.makedirs(JSON_DIR, exist_ok=True)
             df.to_json(json_filepath, orient="records")
 
         return excel_filepath
@@ -210,16 +202,13 @@ class CIPS:
         Returns:
             dict[str, Any]: processed file.
         """
-        _basename = os.path.basename(filename).split(".x")[0]
-        _basename = f"{_basename}__{sheet_name}"
+        _basename = get_basename(filename, sheet_name, prefix=self.prefix)
 
-        if _basename[0:4] != "cips":
-            _basename = f"cips_{_basename}"
-
-        os.makedirs(EXCEL_DIR, exist_ok=True)
-        excel_filepath = os.path.join(EXCEL_DIR, f"{slugify(_basename)}.xlsx")
+        excel_filepath = os.path.join(
+            self.excel_dir, f"{slugify(_basename)}.xlsx"
+        )
         json_filepath = (
-            os.path.join(JSON_DIR, f"{slugify(_basename)}.json")
+            os.path.join(self.json_dir, f"{slugify(_basename)}.json")
             if as_json
             else None
         )
@@ -255,20 +244,47 @@ class CIPS:
                 "sheet": None,
             }
 
+    def create_dir(self) -> Self:
+        os.makedirs(self.excel_dir, exist_ok=True)
+        os.makedirs(self.json_dir, exist_ok=True)
+        return self
+
     def normalize(self) -> None:
         if len(self.files) > 0:
+            self.create_dir()
             for file in self.files:
                 if self.verbose:
                     print(f"Processing file: {file}")
                 sheets = worksheets(file)
-                dfs = pd.read_excel(file, sheet_name=None)
+
+                sheet_name = None
+                if self.check_sequential_file:
+                    sheet_name = sequential_file(sheets)
+
+                    # Change to Sequential file sheet
+                    sheets = [sheet_name]
+                    if sheet_name is None:
+                        self.results.append(
+                            {
+                                "success": False,
+                                "message": f"Missing Sequential File sheet",
+                                "excel": file,
+                                "json": None,
+                                "sheet": None,
+                            }
+                        )
+                        continue
+
+                dfs = pd.read_excel(file, sheet_name=sheet_name)
                 for sheet in sheets:
                     if self.verbose:
                         print(f"|| Processing sheet: {sheet}", end="")
-                    df = dfs[sheet]
+                    df = dfs[sheet] if (sheet_name is None) else dfs
                     columns = df.columns.tolist()
-                    ok, missing_columns = self.validate_column(columns)
-                    if ok:
+                    column_is_oke, missing_columns = self.validate_column(
+                        columns
+                    )
+                    if column_is_oke:
                         print(" OK!")
                         result = self.process_df(
                             df,
