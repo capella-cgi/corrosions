@@ -1,5 +1,8 @@
 /.idea
 /.uv_cache
 /.venv
+/build
 *.xlsx
 *.json
+*.pyc
+/src/corrosions.egg-info/

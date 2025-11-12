@@ -1,7 +1,14 @@
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
 [project]
 name = "corrosions"
 version = "0.1.0"
-description = "Add your description here"
+authors = [
+    {name = "Martanto", email = "martanto@live.com"},
+]
+description = "Corrosion calculation created by Capella Global Innovation"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,7 +16,14 @@ dependencies = [
     "isort>=7.0.0",
     "openpyxl>=3.1.5",
     "pandas>=2.3.3",
+    "pip>=25.3",
     "python-slugify>=8.0.4",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 [tool.black]
