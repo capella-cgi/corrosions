@@ -18,6 +18,7 @@ class PCM(CIPS):
         self.prefix = "pcm"
 
         self.COLUMNS_VALIDATED = [
+            "Index",
             "4Hz Current (A)",
             "Int GPS Latitude",
             "Int GPS Longitude",
@@ -64,9 +65,9 @@ class PCM(CIPS):
         last_y = m * (len(y) - 1) + c
 
         if first_y > last_y:
-            return "DOWN"
+            return "DECREASING"
 
-        return "UP"
+        return "INCREASING"
 
     def transform(
         self,

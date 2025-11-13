@@ -5,6 +5,7 @@
 from importlib.metadata import version
 from .cips import CIPS
 from .pcm import PCM
+from .sync import Sync
 
 __version__ = version("corrosions")
 __author__ = "Martanto"
@@ -20,4 +21,6 @@ __all__ = [
     "__license__",
     "__copyright__",
     "CIPS",
+    "PCM",
+    "Sync",
 ]

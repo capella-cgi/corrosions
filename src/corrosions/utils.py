@@ -19,21 +19,10 @@ def worksheets(file: str) -> List[str]:
     return sheets
 
 
-def basename(filename: str) -> str:
-    """Extract basename from filename.
-
-    Args:
-        filename (str): filename.
-
-    Returns:
-        str: basename of filename.
-    """
-    name = os.path.basename(filename).split(".x")[0]
-    return slugify(name)
-
-
-def calculate_distance(lat1, lon1, lat2, lon2) -> float:
-    """Calculate distance between two points using haversine formula.
+def calculate_distance(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
+    """Calculate distance in meter between two points using haversine formula.
 
     Args:
         lat1: First latitude.
