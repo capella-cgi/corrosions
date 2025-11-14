@@ -70,7 +70,7 @@ class CIPS:
         """Extract data from a file.
 
         Args:
-            df (pd.DataFramae): data frame.
+            df (pd.DataFrame): data frame.
 
         Returns:
             pd.DataFrame: data extracted.
@@ -169,15 +169,11 @@ class CIPS:
                 distance + df.loc[index - 1, "Real Distance"]
             )
 
-        new_columns = []
-        for column in df.columns:
-            new_columns.append(slugify(column, separator="_"))
-
-        df.columns = new_columns
-        df.set_index("data_no", inplace=True)
+        df.set_index("Data No", inplace=True)
         df.to_excel(excel_filepath, sheet_name=sheet_name, index=True)
 
         if json_filepath:
+            df.columns = rename_columns(df.columns.tolist())
             df.to_json(json_filepath, orient="records")
 
         return excel_filepath

@@ -97,3 +97,52 @@ def sequential_file(sheet_names: list[str]) -> str | None:
         return "Sheet1"
 
     return None
+
+
+def rename_columns(columns: list[str]) -> list[str]:
+    """Rename columns.
+
+    Args:
+        columns (list[str]): list of column names.
+
+    Returns:
+        list[str]: list of column names.
+    """
+    new_columns = []
+    for column in columns:
+        new_columns.append(slugify(column, separator="_"))
+
+    return new_columns
+
+
+def json_file(excel_filepath: str) -> str:
+    """Get json file path.
+
+    Args:
+        excel_filepath (str): excel file path.
+
+    Returns:
+        str: json file path.
+    """
+    filepath = excel_filepath.replace(".xlsx", ".json").replace(
+        "excel", "json"
+    )
+    return filepath
+
+
+def save_df(df: pd.DataFrame, filepath: str) -> str:
+    """Save dataframe to excel and json file.
+
+    Args:
+        df (pd.DataFrame): dataframe.
+        filepath (str): excel file path.
+
+    Returns:
+        str: excel file path.
+    """
+    new_df = df.copy()
+    new_df.to_excel(filepath)
+    new_df.columns = rename_columns(df.columns.tolist())
+    new_df.to_json(json_file(filepath), orient="records")
+
+    return filepath

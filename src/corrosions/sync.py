@@ -1,6 +1,6 @@
-from functools import cached_property, lru_cache
+from functools import lru_cache
 import pandas as pd
-from .utils import calculate_distance
+from .utils import calculate_distance, save_df
 
 
 class Sync:
@@ -135,19 +135,19 @@ class Sync:
     # CIPS
     @property
     def first_cips_latitude(self) -> float:
-        return self.df_cips.iloc[0]["latitude"]
+        return self.df_cips.iloc[0]["Latitude"]
 
     @property
     def first_cips_longitude(self) -> float:
-        return self.df_cips.iloc[0]["longitude"]
+        return self.df_cips.iloc[0]["Longitude"]
 
     @property
     def last_cips_latitude(self) -> float:
-        return self.df_cips.iloc[-1]["latitude"]
+        return self.df_cips.iloc[-1]["Latitude"]
 
     @property
     def last_cips_longitude(self) -> float:
-        return self.df_cips.iloc[-1]["longitude"]
+        return self.df_cips.iloc[-1]["Longitude"]
 
     @property
     def first_cips_coordinates(self) -> tuple[float, float]:
@@ -299,7 +299,7 @@ class Sync:
                 print("Flipping CIPS")
             self.df_cips = self.invert(self.df_cips)
             if save:
-                self.df_cips.to_excel(self.normalized_cips_file)
+                save_df(df=self.df_cips, filepath=self.normalized_cips_file)
                 if self.verbose:
                     print(
                         f"CIPS Normalized file updated: {self.normalized_cips_file}"
@@ -310,7 +310,7 @@ class Sync:
                 print("Flipping PCM")
             self.df_pcm = self.invert(self.df_pcm)
             if save:
-                self.df_pcm.to_excel(self.normalized_pcm_file)
+                save_df(df=self.df_pcm, filepath=self.normalized_pcm_file)
                 if self.verbose:
                     print(
                         f"PCM Normalized file updated: {self.normalized_pcm_file}"
@@ -333,21 +333,22 @@ class Sync:
         df.reset_index(inplace=True)
         for index in df.index:
             if index == 0:
-                df["distance"] = 0.0
-                df["real_distance"] = reference_distance
+                df["Distance"] = 0.0
+                df["Real Distance"] = reference_distance
                 continue
 
-            lat_1 = df.loc[index - 1, "latitude"]
-            lon_1 = df.loc[index - 1, "longitude"]
-            lat_2 = df.loc[index, "latitude"]
-            lon_2 = df.loc[index, "longitude"]
+            lat_1 = df.loc[index - 1, "Latitude"]
+            lon_1 = df.loc[index - 1, "Longitude"]
+            lat_2 = df.loc[index, "Latitude"]
+            lon_2 = df.loc[index, "Longitude"]
 
             distance = calculate_distance(lat_1, lon_1, lat_2, lon_2)
-            df.loc[index, "distance"] = distance
-            df.loc[index, "real_distance"] = (
-                distance + df.loc[index - 1, "real_distance"]
+            df.loc[index, "Distance"] = distance
+            df.loc[index, "Real Distance"] = (
+                distance + df.loc[index - 1, "Real Distance"]
             )
-        df.set_index("data_no", inplace=True)
+        df.set_index("Data No", inplace=True)
+        save_df(df=df, filepath=self.normalized_cips_file)
         self.df_cips = df
 
     def recalculate_distance(self) -> None:

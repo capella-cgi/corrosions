@@ -91,8 +91,6 @@ class PCM(CIPS):
         df1 = df
 
         if "Unnamed: 41" in df1.columns.tolist():
-            if self.verbose:
-                print("Drop column unnamed41")
             df1.drop(columns=["Unnamed: 41"], inplace=True)
 
         df1.dropna(how="all", inplace=True)
@@ -135,7 +133,9 @@ class PCM(CIPS):
 
         try:
             writer = pd.ExcelWriter(excel_filepath, engine="xlsxwriter")
+
             df1.to_excel(writer, sheet_name="Sequential File", index=False)
+            df1.columns = rename_columns(df1.columns.tolist())
             df1.to_json(json_filepath, orient="records")
             df2.to_excel(writer, sheet_name="Survey Name", index=False)
 
