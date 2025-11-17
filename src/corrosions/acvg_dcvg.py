@@ -75,7 +75,7 @@ class AcvgDcvg(PCM):
                 pcm_coordinates.iloc[np_distances.argmin()]["Real Distance"]
                 + distance_min
             )
-            closest_pcm_distance.append(distance_min)
+            closest_pcm_distance.append(0 - distance_min)
             closest_pcm_index.append(np_distances.argmin())
             closest_pcm_latitude.append(
                 pcm_coordinates.iloc[np_distances.argmin()]["Int GPS Latitude"]
@@ -91,10 +91,10 @@ class AcvgDcvg(PCM):
 
         df_acvg_dcvg["real_distance"] = acvg_dvcg_distance
         df_acvg_dcvg["closest_pcm_distance"] = closest_pcm_distance
+        df_acvg_dcvg["closest_pcm_real_distance"] = closest_pcm_real_distance
         df_acvg_dcvg["closest_pcm_index"] = closest_pcm_index
         df_acvg_dcvg["closest_pcm_latitude"] = closest_pcm_latitude
         df_acvg_dcvg["closest_pcm_longitude"] = closest_pcm_longitude
-        df_acvg_dcvg["closest_pcm_real_distance"] = closest_pcm_real_distance
 
         df_acvg_dcvg.sort_values("real_distance", ascending=True, inplace=True)
 
