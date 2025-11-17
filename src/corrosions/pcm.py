@@ -25,6 +25,8 @@ class PCM(CIPS):
             "Survey name (0-100)",
         ]
 
+        self.UNIQUE_COLUMNS = ["Int GPS Latitude", "Int GPS Longitude"]
+
         self.check_sequential_file = True
         self.excel_dir = PCM_EXCEL_DIR
         self.json_dir = PCM_JSON_DIR
@@ -92,9 +94,6 @@ class PCM(CIPS):
 
         if "Unnamed: 41" in df1.columns.tolist():
             df1.drop(columns=["Unnamed: 41"], inplace=True)
-
-        df1.dropna(how="all", inplace=True)
-        df1.reset_index(drop=True, inplace=True)
 
         # Calculate dBmA
         df1["dbma"] = 20 * np.log10(df1["4Hz Current (A)"] * 1000)

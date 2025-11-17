@@ -1,6 +1,9 @@
+import os
 from functools import lru_cache
 import pandas as pd
 from .utils import calculate_distance, save_df
+from .acvg_dcvg import AcvgDcvg
+from typing import Self
 
 
 class Sync:
@@ -11,7 +14,7 @@ class Sync:
         segment: str,
         pipe_diameter: float,
         length: float,
-        acvg_dcvg_file: str,
+        normalized_acvg_dcvg_file: str,
         normalized_cips_file: str,
         normalized_pcm_file: str,
         verbose: bool = False,
@@ -21,7 +24,7 @@ class Sync:
         self.year = year
         self.pipe_diameter = pipe_diameter  # inch
         self.length = length  # km
-        self.acvg_dcvg_file = acvg_dcvg_file
+        self.normalized_acvg_dcvg_file = normalized_acvg_dcvg_file
         self.normalized_cips_file = normalized_cips_file
         self.normalized_pcm_file = normalized_pcm_file
         self.verbose = verbose
@@ -30,10 +33,25 @@ class Sync:
         self._df_cips = pd.DataFrame()
         self._df_pcm = pd.DataFrame()
 
+        self.validate()
+
     def __repr__(self):
         return (
             f"<Sync {self.year}: {self.area}. Segment: {self.segment}. "
             f"Diameter: {self.pipe_diameter} - {self.length} km>"
+        )
+
+    def validate(self) -> None:
+        """Validate parameter"""
+        assert os.path.isfile(self.normalized_acvg_dcvg_file), OSError(
+            f"{self.normalized_acvg_dcvg_file} not found."
+        )
+
+        assert os.path.isfile(self.normalized_cips_file), OSError(
+            f"{self.normalized_cips_file} not found."
+        )
+        assert os.path.isfile(self.normalized_pcm_file), OSError(
+            f"{self.normalized_pcm_file} not found."
         )
 
     @property
@@ -45,7 +63,7 @@ class Sync:
             "pipe_diameter": self.pipe_diameter,
             "length": self.length,
             "files": {
-                "acvg_dcvg": self.acvg_dcvg_file,
+                "acvg_dcvg": self.normalized_acvg_dcvg_file,
                 "pcm": self.normalized_pcm_file,
                 "cips": self.normalized_cips_file,
             },
@@ -57,7 +75,7 @@ class Sync:
 
         @lru_cache
         def cache_df_acvg_dcvg():
-            df = pd.read_excel(self.acvg_dcvg_file)
+            df = pd.read_excel(self.normalized_acvg_dcvg_file)
             df.dropna(how="all", inplace=True)
             return df
 
@@ -288,11 +306,11 @@ class Sync:
             return False
         return True
 
-    def fix(self, save: bool = True) -> None:
+    def fix(self, save: bool = True) -> Self:
         if self.pcm_is_sync and self.cips_is_sync:
             if self.verbose:
                 print(f"PCM and CIPS are sync")
-            return None
+            return self
 
         if not self.cips_is_sync:
             if self.verbose:
@@ -316,7 +334,7 @@ class Sync:
                         f"PCM Normalized file updated: {self.normalized_pcm_file}"
                     )
 
-        return None
+        return self
 
     def invert(self, df: pd.DataFrame) -> pd.DataFrame:
         max_distance = df["Real Distance"].max()
@@ -326,7 +344,7 @@ class Sync:
             print("Inverted Real Distance")
         return df
 
-    def recalculate_distance_cips(self) -> None:
+    def recalculate_distance_cips(self) -> Self:
         reference_distance = self.matrix_distance_cips["first_first"]
 
         df = self.df_cips
@@ -350,10 +368,24 @@ class Sync:
         df.set_index("Data No", inplace=True)
         save_df(df=df, filepath=self.normalized_cips_file)
         self.df_cips = df
+        return self
 
-    def recalculate_distance(self) -> None:
+    def recalculate_distance_acvg_dcvg(self) -> Self:
+        df_acvg_dcvg = self.df_acvg_dcvg
+        df_pcm = self.df_pcm
+        df = AcvgDcvg.closest_distance(df_acvg_dcvg, df_pcm)
+        save_df(
+            df=df, filepath=self.normalized_acvg_dcvg_file, save_index=False
+        )
+        self.df_acvg_dcvg = df
+        return self
+
+    def recalculate_distance(self) -> Self:
         if self.cips_is_sync and self.pcm_is_sync:
-            return self.recalculate_distance_cips()
+            self.recalculate_distance_cips().recalculate_distance_acvg_dcvg()
+            if self.verbose:
+                print("Sync is done.")
+            return self
         if self.verbose:
             print("CIPS and PCM need to be synced.")
-        return None
+        return self

@@ -66,10 +66,12 @@ def get_basename(
     Returns:
         str: basename of filename.
     """
-    _basename = os.path.basename(filename).split(".x")[0]
+    _basename = os.path.basename(filename).split(".xlsx")[0]
     _basename = f"{_basename}__{sheet_name}"
+    _basename = slugify(_basename)
+    prefix = slugify(prefix)
 
-    if _basename[0 : len(prefix)].lower() != prefix:
+    if _basename[0 : len(prefix)] != prefix:
         _basename = f"{prefix}_{_basename}"
 
     return _basename
@@ -130,18 +132,19 @@ def json_file(excel_filepath: str) -> str:
     return filepath
 
 
-def save_df(df: pd.DataFrame, filepath: str) -> str:
+def save_df(df: pd.DataFrame, filepath: str, save_index: bool = True) -> str:
     """Save dataframe to excel and json file.
 
     Args:
         df (pd.DataFrame): dataframe.
         filepath (str): excel file path.
+        save_index (bool, optional): save index. Defaults to True.
 
     Returns:
         str: excel file path.
     """
     new_df = df.copy()
-    new_df.to_excel(filepath)
+    new_df.to_excel(filepath, index=save_index)
     new_df.columns = rename_columns(df.columns.tolist())
     new_df.to_json(json_file(filepath), orient="records")
 

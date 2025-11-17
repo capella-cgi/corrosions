@@ -26,6 +26,8 @@ class CIPS:
             "DCP/Feature/DCVG Anomaly",
         ]
 
+        self.UNIQUE_COLUMNS = ["Latitude", "Longitude"]
+
         self.check_sequential_file = False
         self.verbose = verbose
 
@@ -178,6 +180,22 @@ class CIPS:
 
         return excel_filepath
 
+    def drop_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop empty row and duplicated columns.
+
+        Args:
+            df: pd.DataFrame
+
+        Returns:
+            pd.DataFrame
+        """
+        df.dropna(how="all", inplace=True)
+        df = df.drop_duplicates(
+            subset=self.UNIQUE_COLUMNS, keep="last"
+        ).reset_index(drop=True)
+
+        return df
+
     def process_df(
         self,
         df: pd.DataFrame,
@@ -219,6 +237,8 @@ class CIPS:
             }
 
         try:
+            df = self.drop_columns(df)
+
             return {
                 "success": True,
                 "message": "File normalized",
@@ -281,7 +301,8 @@ class CIPS:
                         columns
                     )
                     if column_is_oke:
-                        print(" OK!")
+                        if self.verbose:
+                            print(" OK!")
                         result = self.process_df(
                             df,
                             filename=file,
@@ -291,7 +312,8 @@ class CIPS:
                         )
                         self.results.append(result)
                     else:
-                        print(" ‼️NOT OK!")
+                        if self.verbose:
+                            print(" ‼️NOT OK!")
                         self.results.append(
                             {
                                 "success": False,
