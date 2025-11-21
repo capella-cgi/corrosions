@@ -23,6 +23,7 @@ class PCM(CIPS):
             "Int GPS Latitude",
             "Int GPS Longitude",
             "Survey name (0-100)",
+            "Gain (dB)",
         ]
 
         self.UNIQUE_COLUMNS = ["Int GPS Latitude", "Int GPS Longitude"]

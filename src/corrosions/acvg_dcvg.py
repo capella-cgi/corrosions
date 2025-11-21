@@ -43,7 +43,7 @@ class AcvgDcvg(PCM):
         self.json_dir = ACVG_DCVG_JSON_DIR
 
     @staticmethod
-    def closest_distance(
+    def closest_distance_pcm(
         df_acvg_dcvg: pd.DataFrame, df_pcm: pd.DataFrame
     ) -> pd.DataFrame:
         acvg_dvcg_distance = []
@@ -100,6 +100,67 @@ class AcvgDcvg(PCM):
 
         return df_acvg_dcvg
 
+    @staticmethod
+    def closest_distance_cips(
+        df_acvg_dcvg: pd.DataFrame, df_cips: pd.DataFrame
+    ) -> pd.DataFrame:
+        closest_cips_distance = []
+        closest_cips_index = []
+        closest_cips_latitude = []
+        closest_cips_longitude = []
+        closest_cips_real_distance = []
+        closest_cips_condition = []
+        closest_cips_voltage_inverse = []
+
+        cips_coordinates = df_cips[["Latitude", "Longitude", "Real Distance"]]
+
+        for index, row_acvg_dcvg in df_acvg_dcvg.iterrows():
+            distances = []
+            lat2 = row_acvg_dcvg["latitude"]
+            lon2 = row_acvg_dcvg["longitude"]
+
+            for _, cips in cips_coordinates.iterrows():
+                lat1 = cips["Latitude"]
+                lon1 = cips["Longitude"]
+                distance = calculate_distance(lat1, lon1, lat2, lon2)
+                distances.append(distance)
+
+            np_distances = np.array(distances)
+            distance_min = np.min(np_distances)
+
+            closest_cips_distance.append(0 - distance_min)
+            closest_cips_index.append(np_distances.argmin())
+
+            closest_cips_voltage_inverse.append(
+                df_cips.iloc[np_distances.argmin()]["voltage_inverse"]
+            )
+            closest_cips_condition.append(
+                df_cips.iloc[np_distances.argmin()]["condition"]
+            )
+            closest_cips_latitude.append(
+                cips_coordinates.iloc[np_distances.argmin()]["Latitude"]
+            )
+            closest_cips_longitude.append(
+                cips_coordinates.iloc[np_distances.argmin()]["Longitude"]
+            )
+            closest_cips_real_distance.append(
+                cips_coordinates.iloc[np_distances.argmin()]["Real Distance"]
+            )
+
+        df_acvg_dcvg["closest_cips_distance"] = closest_cips_distance
+        df_acvg_dcvg["closest_cips_real_distance"] = closest_cips_real_distance
+        df_acvg_dcvg["closest_cips_index"] = closest_cips_index
+        df_acvg_dcvg["closest_cips_latitude"] = closest_cips_latitude
+        df_acvg_dcvg["closest_cips_longitude"] = closest_cips_longitude
+        df_acvg_dcvg["closest_cips_voltage_inverse"] = (
+            closest_cips_voltage_inverse
+        )
+        df_acvg_dcvg["closest_cips_condition"] = closest_cips_condition
+
+        df_acvg_dcvg.sort_values("real_distance", ascending=True, inplace=True)
+
+        return df_acvg_dcvg
+
     def transform(
         self,
         df: pd.DataFrame,
@@ -124,6 +185,13 @@ class AcvgDcvg(PCM):
 
         try:
             writer = pd.ExcelWriter(excel_filepath, engine="xlsxwriter")
+
+            df_acvg_dcvg["survey_dcvg"] = df_acvg_dcvg["survey_dcvg"].apply(
+                lambda x: x.strftime("%Y-%m-%d")
+            )
+            df_acvg_dcvg["survey_acvg"] = df_acvg_dcvg["survey_acvg"].apply(
+                lambda x: x.strftime("%Y-%m-%d")
+            )
 
             df_acvg_dcvg.to_excel(writer, sheet_name="Sheet1", index=False)
             df_acvg_dcvg.columns = rename_columns(

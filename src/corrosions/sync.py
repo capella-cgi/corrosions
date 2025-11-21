@@ -3,7 +3,7 @@ from functools import lru_cache
 import pandas as pd
 from .utils import calculate_distance, save_df
 from .acvg_dcvg import AcvgDcvg
-from typing import Self
+from typing import Self, Optional
 
 
 class Sync:
@@ -11,16 +11,16 @@ class Sync:
         self,
         area: str,
         year: int,
-        segment: str,
+        segment_code: str,
         pipe_diameter: float,
         length: float,
-        normalized_acvg_dcvg_file: str,
         normalized_cips_file: str,
         normalized_pcm_file: str,
+        normalized_acvg_dcvg_file: Optional[str] = None,
         verbose: bool = False,
     ):
         self.area = area
-        self.segment = segment
+        self.segment_code = segment_code
         self.year = year
         self.pipe_diameter = pipe_diameter  # inch
         self.length = length  # km
@@ -37,8 +37,11 @@ class Sync:
 
     def __repr__(self):
         return (
-            f"<Sync {self.year}: {self.area}. Segment: {self.segment}. "
-            f"Diameter: {self.pipe_diameter} - {self.length} km>"
+            f"<Sync {self.year}: {self.area}. Segment: {self.segment_code}. "
+            f"Diameter: {self.pipe_diameter}. Length: {self.length} km>. "
+            f"ACVG/DCVG File: {self.normalized_acvg_dcvg_file}, "
+            f"CIPS File: {self.normalized_cips_file}, "
+            f"PCM File: {self.normalized_pcm_file}>"
         )
 
     def validate(self) -> None:
@@ -59,7 +62,7 @@ class Sync:
         return {
             "year": self.year,
             "area": self.area,
-            "segment": self.segment,
+            "segment": self.segment_code,
             "pipe_diameter": self.pipe_diameter,
             "length": self.length,
             "files": {
@@ -72,6 +75,9 @@ class Sync:
     # DataFrame
     @property
     def df_acvg_dcvg(self) -> pd.DataFrame:
+
+        if self.normalized_acvg_dcvg_file is None:
+            return pd.DataFrame()
 
         @lru_cache
         def cache_df_acvg_dcvg():
@@ -309,7 +315,9 @@ class Sync:
     def fix(self, save: bool = True) -> Self:
         if self.pcm_is_sync and self.cips_is_sync:
             if self.verbose:
-                print(f"PCM and CIPS are sync")
+                print(
+                    f"<{self.area} - {self.segment_code}>PCM and CIPS are sync"
+                )
             return self
 
         if not self.cips_is_sync:
@@ -320,7 +328,7 @@ class Sync:
                 save_df(df=self.df_cips, filepath=self.normalized_cips_file)
                 if self.verbose:
                     print(
-                        f"CIPS Normalized file updated: {self.normalized_cips_file}"
+                        f"<{self.area} - {self.segment_code}>CIPS Normalized file updated: {self.normalized_cips_file}"
                     )
 
         if not self.pcm_is_sync:
@@ -331,20 +339,33 @@ class Sync:
                 save_df(df=self.df_pcm, filepath=self.normalized_pcm_file)
                 if self.verbose:
                     print(
-                        f"PCM Normalized file updated: {self.normalized_pcm_file}"
+                        f"<{self.area} - {self.segment_code}>PCM Normalized file updated: {self.normalized_pcm_file}"
                     )
 
         return self
 
     def invert(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Correction zero point.
+
+        Args:
+            df: pd.DataFrame
+
+        Returns:
+            pd.DataFrame
+        """
         max_distance = df["Real Distance"].max()
         df["Real Distance"] = max_distance - df["Real Distance"]
         df.sort_values("Real Distance", ascending=True, inplace=True)
         if self.verbose:
-            print("Inverted Real Distance")
+            print(f"<{self.area} - {self.segment_code}>Inverted Real Distance")
         return df
 
     def recalculate_distance_cips(self) -> Self:
+        """Recalculate distance between CIPS and PCM.
+
+        Returns:
+            self
+        """
         reference_distance = self.matrix_distance_cips["first_first"]
 
         df = self.df_cips
@@ -371,9 +392,21 @@ class Sync:
         return self
 
     def recalculate_distance_acvg_dcvg(self) -> Self:
+        """Recalculate distance between ACVG/DCVG and PCM and CIPS.
+
+        Returns:
+            self
+        """
+        if self.normalized_acvg_dcvg_file is None:
+            return self
+
         df_acvg_dcvg = self.df_acvg_dcvg
         df_pcm = self.df_pcm
-        df = AcvgDcvg.closest_distance(df_acvg_dcvg, df_pcm)
+        df_cips = self.df_cips
+
+        df_acvg_dcvg = AcvgDcvg.closest_distance_pcm(df_acvg_dcvg, df_pcm)
+        df = AcvgDcvg.closest_distance_cips(df_acvg_dcvg, df_cips)
+
         save_df(
             df=df, filepath=self.normalized_acvg_dcvg_file, save_index=False
         )
@@ -381,11 +414,18 @@ class Sync:
         return self
 
     def recalculate_distance(self) -> Self:
+        """Recalculate distance between ACVG/DCVG, CIPS and PCM.
+
+        Returns:
+            self
+        """
         if self.cips_is_sync and self.pcm_is_sync:
             self.recalculate_distance_cips().recalculate_distance_acvg_dcvg()
             if self.verbose:
-                print("Sync is done.")
+                print(f"<{self.area} - {self.segment_code}>Sync is done.")
             return self
         if self.verbose:
-            print("CIPS and PCM need to be synced.")
+            print(
+                f"<{self.area} - {self.segment_code}>CIPS and PCM need to be synced."
+            )
         return self
