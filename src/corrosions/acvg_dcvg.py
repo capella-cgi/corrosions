@@ -187,10 +187,10 @@ class AcvgDcvg(PCM):
             writer = pd.ExcelWriter(excel_filepath, engine="xlsxwriter")
 
             df_acvg_dcvg["survey_dcvg"] = df_acvg_dcvg["survey_dcvg"].apply(
-                lambda x: x.strftime("%Y-%m-%d")
+                lambda x: x.strftime("%Y-%m-%d") if not pd.isnull(x) else None
             )
             df_acvg_dcvg["survey_acvg"] = df_acvg_dcvg["survey_acvg"].apply(
-                lambda x: x.strftime("%Y-%m-%d")
+                lambda x: x.strftime("%Y-%m-%d") if not pd.isnull(x) else None
             )
 
             df_acvg_dcvg.to_excel(writer, sheet_name="Sheet1", index=False)
