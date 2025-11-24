@@ -90,8 +90,15 @@ class PCM(CIPS):
         Returns:
             str: normalized file.
         """
+        df1 = df.iloc[:, list(range(0, 42))].copy()
+        df1 = df1[
+            (df["Int GPS Latitude"] != 0) | (df["Int GPS Longitude"] != 0)
+        ]
+        df1.dropna(
+            subset=["Int GPS Latitude", "Int GPS Longitude"], inplace=True
+        )
 
-        df1 = df
+        df1.reset_index(drop=True, inplace=True)
 
         if "Unnamed: 41" in df1.columns.tolist():
             df1.drop(columns=["Unnamed: 41"], inplace=True)

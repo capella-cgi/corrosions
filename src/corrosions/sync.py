@@ -60,16 +60,24 @@ class Sync:
     @property
     def dict(self):
         return {
+            "area_code": self.area,
             "year": self.year,
-            "area": self.area,
-            "segment": self.segment_code,
             "pipe_diameter": self.pipe_diameter,
             "length": self.length,
-            "files": {
-                "acvg_dcvg": self.normalized_acvg_dcvg_file,
-                "pcm": self.normalized_pcm_file,
-                "cips": self.normalized_cips_file,
-            },
+            "segment_code": self.segment_code,
+            "acvg_dcvg_file": (
+                os.path.basename(self.normalized_acvg_dcvg_file).replace(
+                    ".xlsx", ".json"
+                )
+                if self.normalized_acvg_dcvg_file is not None
+                else None
+            ),
+            "pcm_file": os.path.basename(self.normalized_pcm_file).replace(
+                ".xlsx", ".json"
+            ),
+            "cips_file": os.path.basename(self.normalized_cips_file).replace(
+                ".xlsx", ".json"
+            ),
         }
 
     # DataFrame

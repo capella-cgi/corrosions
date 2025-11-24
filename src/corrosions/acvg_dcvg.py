@@ -181,7 +181,10 @@ class AcvgDcvg(PCM):
         """
         df_acvg_dcvg = df.drop_duplicates(
             subset=self.UNIQUE_COLUMNS, keep="last"
-        ).reset_index(drop=True)
+        )
+
+        df_acvg_dcvg.dropna(subset=["latitude", "longitude"], inplace=True)
+        df_acvg_dcvg.reset_index(drop=True, inplace=True)
 
         try:
             writer = pd.ExcelWriter(excel_filepath, engine="xlsxwriter")

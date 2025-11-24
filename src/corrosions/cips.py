@@ -254,7 +254,7 @@ class CIPS:
         except Exception as e:
             return {
                 "success": False,
-                "message": str(e),
+                "message": e,
                 "excel": filename,
                 "json": json_filepath,
                 "sheet": None,
