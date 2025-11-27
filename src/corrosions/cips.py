@@ -83,6 +83,7 @@ class CIPS:
                 [
                     "Data No",
                     "Off Voltage",
+                    "On Voltage",
                     "Latitude",
                     "Longitude",
                     "Comment",
@@ -104,6 +105,7 @@ class CIPS:
                 "DCP/Feature/DCVG Anomaly",
             ]
         ].copy(deep=True)
+        df["On Voltage"] = None
         df["protection"] = "SACP"
         return df
 
@@ -145,6 +147,7 @@ class CIPS:
 
         df["condition"] = df["Voltage"].apply(lambda x: self.condition(x))
         df["voltage_inverse"] = df["Voltage"] * -1
+        df["on_voltage_inverse"] = df["On Voltage"] * -1
 
         df["type"] = "PCM" if "4Hz Current (A)" in df.columns else "CIPS"
         df["interpolated"] = df["Latitude"].isna() & df["Longitude"].isna()
@@ -252,6 +255,8 @@ class CIPS:
                 "sheet": sheet_name,
             }
         except Exception as e:
+            if self.verbose:
+                raise Exception(e)
             return {
                 "success": False,
                 "message": e,
