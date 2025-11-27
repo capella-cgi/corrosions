@@ -89,6 +89,9 @@ def sequential_file(sheet_names: list[str]) -> str | None:
     if len(sheet_names) == 1:
         return sheet_names[0]
 
+    if "Data" in sheet_names:
+        return "Data"
+
     if "Sequential File" in sheet_names:
         return "Sequential File"
 
