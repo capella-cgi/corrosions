@@ -63,14 +63,18 @@ class PCM(CIPS):
             ].tolist()
         )
         x = range(len(y))
-        m, c = np.polyfit(x, y, 1)
-        first_y = m * 0 + c
-        last_y = m * (len(y) - 1) + c
 
-        if first_y > last_y:
-            return "DECREASING"
+        try:
+            m, c = np.polyfit(x, y, 1)
+            first_y = m * 0 + c
+            last_y = m * (len(y) - 1) + c
 
-        return "INCREASING"
+            if first_y > last_y:
+                return "DECREASING"
+
+            return "INCREASING"
+        except Exception as e:
+            return "UNKNOWN"
 
     def transform(
         self,
@@ -90,15 +94,21 @@ class PCM(CIPS):
         Returns:
             str: normalized file.
         """
-        df1 = df.iloc[:, list(range(0, 42))].copy()
+
+        df1 = df.iloc[:, 0:41].copy()
         df1 = df1[
-            (df["Int GPS Latitude"] != 0) | (df["Int GPS Longitude"] != 0)
+            (df["Int GPS Latitude"] != 0)
+            & (df["Int GPS Longitude"] != 0)
+            & (df["4Hz Current (A)"] > 0.00)
         ]
         df1.dropna(
-            subset=["Int GPS Latitude", "Int GPS Longitude"], inplace=True
+            subset=[
+                "Int GPS Latitude",
+                "Int GPS Longitude",
+                "4Hz Current (A)",
+            ],
+            inplace=True,
         )
-
-        df1.reset_index(drop=True, inplace=True)
 
         if "Unnamed: 41" in df1.columns.tolist():
             df1.drop(columns=["Unnamed: 41"], inplace=True)
@@ -106,11 +116,22 @@ class PCM(CIPS):
         # Calculate dBmA
         df1["dbma"] = 20 * np.log10(df1["4Hz Current (A)"] * 1000)
 
-        # Calculate Distance
+        # Fix depth
+        df1["Depth (m)"] = df1["Depth (m)"] * -1
+        df1["Depth (ft)"] = df1["Depth (ft)"] * -1
+        df1["Depth to pipe center (m)"] = df1["Depth to pipe center (m)"] * -1
+        df1["Depth to pipe center (ft)"] = (
+            df1["Depth to pipe center (ft)"] * -1
+        )
+
+        df1.reset_index(drop=True, inplace=True)
+
+        # Calculate Distance and Current Loss Rate
         for index in df1.index:
             if index == 0:
                 df1["Distance"] = 0.0
                 df1["Real Distance"] = 0.0
+                df1["Current Loss Rate"] = 0.0
                 continue
 
             lat_1 = df1.loc[index - 1, "Int GPS Latitude"]
@@ -118,10 +139,17 @@ class PCM(CIPS):
             lat_2 = df1.loc[index, "Int GPS Latitude"]
             lon_2 = df1.loc[index, "Int GPS Longitude"]
 
+            # Calculate Distance
             distance = calculate_distance(lat_1, lon_1, lat_2, lon_2)
             df1.loc[index, "Distance"] = distance
             df1.loc[index, "Real Distance"] = (
                 distance + df1.loc[index - 1, "Real Distance"]
+            )
+
+            # Current Loss Rate (CLR) as milliBels/meter (mB/m)
+            delta_dbma = df1.loc[index, "dbma"] - df1.loc[index - 1, "dbma"]
+            df1.loc[index, "Current Loss Rate"] = (
+                abs(delta_dbma / distance) * 1000
             )
 
         df2 = pd.DataFrame(
