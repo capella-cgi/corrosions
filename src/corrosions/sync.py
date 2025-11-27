@@ -17,13 +17,14 @@ class Sync:
         normalized_cips_file: str,
         normalized_pcm_file: str,
         normalized_acvg_dcvg_file: Optional[str] = None,
+        output_dir: Optional[str] = None,
         verbose: bool = False,
     ):
         self.area = area
         self.segment_code = segment_code
         self.year = year
         self.pipe_diameter = pipe_diameter  # inch
-        self.length = length  # km
+        self.pipe_length = length  # km
         self.normalized_acvg_dcvg_file = normalized_acvg_dcvg_file
         self.normalized_cips_file = normalized_cips_file
         self.normalized_pcm_file = normalized_pcm_file
@@ -33,12 +34,14 @@ class Sync:
         self._df_cips = pd.DataFrame()
         self._df_pcm = pd.DataFrame()
 
+        self.output_dir = output_dir
+
         self.validate()
 
     def __repr__(self):
         return (
             f"<Sync {self.year}: {self.area}. Segment: {self.segment_code}. "
-            f"Diameter: {self.pipe_diameter}. Length: {self.length} km>. "
+            f"Diameter: {self.pipe_diameter}. Length: {self.pipe_length} km>. "
             f"ACVG/DCVG File: {self.normalized_acvg_dcvg_file}, "
             f"CIPS File: {self.normalized_cips_file}, "
             f"PCM File: {self.normalized_pcm_file}>"
@@ -46,9 +49,10 @@ class Sync:
 
     def validate(self) -> None:
         """Validate parameter"""
-        assert os.path.isfile(self.normalized_acvg_dcvg_file), OSError(
-            f"{self.normalized_acvg_dcvg_file} not found."
-        )
+        if self.normalized_acvg_dcvg_file is not None:
+            assert os.path.isfile(self.normalized_acvg_dcvg_file), OSError(
+                f"{self.normalized_acvg_dcvg_file} not found."
+            )
 
         assert os.path.isfile(self.normalized_cips_file), OSError(
             f"{self.normalized_cips_file} not found."
@@ -63,8 +67,9 @@ class Sync:
             "area_code": self.area,
             "year": self.year,
             "pipe_diameter": self.pipe_diameter,
-            "length": self.length,
+            "pipe_length": self.pipe_length,
             "segment_code": self.segment_code,
+            "cips_protection": self.cips_protection,
             "acvg_dcvg_file": (
                 os.path.basename(self.normalized_acvg_dcvg_file).replace(
                     ".xlsx", ".json"
@@ -78,6 +83,13 @@ class Sync:
             "cips_file": os.path.basename(self.normalized_cips_file).replace(
                 ".xlsx", ".json"
             ),
+            "acvg_dcvg_excel": (
+                os.path.basename(self.normalized_acvg_dcvg_file)
+                if self.normalized_acvg_dcvg_file is not None
+                else None
+            ),
+            "pcm_excel": os.path.basename(self.normalized_pcm_file),
+            "cips_excel": os.path.basename(self.normalized_cips_file),
         }
 
     # DataFrame
@@ -188,6 +200,10 @@ class Sync:
     @property
     def last_cips_coordinates(self) -> tuple[float, float]:
         return self.last_cips_latitude, self.last_cips_longitude
+
+    @property
+    def cips_protection(self) -> str:
+        return self.df_cips.iloc[0]["protection"]
 
     # PCM
     @property
@@ -344,6 +360,10 @@ class Sync:
                 print("Flipping PCM")
             self.df_pcm = self.invert(self.df_pcm)
             if save:
+
+                if self.output_dir is not None:
+                    print(self.output_dir)
+
                 save_df(df=self.df_pcm, filepath=self.normalized_pcm_file)
                 if self.verbose:
                     print(
@@ -428,6 +448,10 @@ class Sync:
             self
         """
         if self.cips_is_sync and self.pcm_is_sync:
+            if self.verbose:
+                print(
+                    f"<{self.area} - {self.segment_code}>Recalculating distance.."
+                )
             self.recalculate_distance_cips().recalculate_distance_acvg_dcvg()
             if self.verbose:
                 print(f"<{self.area} - {self.segment_code}>Sync is done.")
