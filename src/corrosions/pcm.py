@@ -115,6 +115,7 @@ class PCM(CIPS):
 
         # Calculate dBmA
         df1["dbma"] = 20 * np.log10(df1["4Hz Current (A)"] * 1000)
+        df1["dbma"] = df1["dbma"].apply(lambda x: round(x, 2))
 
         # Fix depth
         df1["Depth (m)"] = df1["Depth (m)"] * -1
@@ -148,8 +149,8 @@ class PCM(CIPS):
 
             # Current Loss Rate (CLR) as milliBels/meter (mB/m)
             delta_dbma = df1.loc[index, "dbma"] - df1.loc[index - 1, "dbma"]
-            df1.loc[index, "Current Loss Rate"] = (
-                abs(delta_dbma / distance) * 1000
+            df1.loc[index, "Current Loss Rate"] = round(
+                abs(delta_dbma / distance) * 1000, 2
             )
 
         df2 = pd.DataFrame(
