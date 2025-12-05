@@ -55,6 +55,7 @@ def get_basename(
     filename: str,
     sheet_name: str,
     prefix: str = "cips",
+    keep_original: bool = False,
 ) -> str:
     """Extract basename from filename.
 
@@ -62,12 +63,15 @@ def get_basename(
         filename (str): filename.
         sheet_name (str): sheet name.
         prefix (str): prefix.
+        keep_original (bool, optional): keep original filename. Defaults to False.
 
     Returns:
         str: basename of filename.
     """
     _basename = os.path.basename(filename).split(".xlsx")[0]
-    _basename = f"{_basename}__{sheet_name}"
+    _basename = (
+        f"{_basename}__{sheet_name}" if not keep_original else _basename
+    )
     _basename = slugify(_basename)
     prefix = slugify(prefix)
 

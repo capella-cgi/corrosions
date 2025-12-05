@@ -11,12 +11,19 @@ class PCM(CIPS):
         self,
         file_or_dir: str,
         overwrite: bool = False,
+        fix_depth: bool = True,
+        calculate_dbma: bool = True,
+        calculate_current_loss_rate: bool = True,
+        keep_original_filename: bool = False,
         verbose: bool = False,
     ):
         super().__init__(file_or_dir, overwrite, verbose)
 
         self.prefix = "pcm"
-
+        self.keep_original_filename = keep_original_filename
+        self.fix_depth = fix_depth
+        self.calculate_dbma = calculate_dbma
+        self.calculate_current_loss_rate = calculate_current_loss_rate
         self.COLUMNS_VALIDATED = [
             "Index",
             "4Hz Current (A)",
@@ -76,6 +83,13 @@ class PCM(CIPS):
         except Exception as e:
             return "UNKNOWN"
 
+    @staticmethod
+    def dbma(df) -> pd.DataFrame:
+        df["dbma"] = 20 * np.log10(df["4Hz Current (A)"] * 1000)
+        df["dbma"] = df["dbma"].apply(lambda x: round(x, 2))
+
+        return df
+
     def transform(
         self,
         df: pd.DataFrame,
@@ -114,16 +128,19 @@ class PCM(CIPS):
             df1.drop(columns=["Unnamed: 41"], inplace=True)
 
         # Calculate dBmA
-        df1["dbma"] = 20 * np.log10(df1["4Hz Current (A)"] * 1000)
-        df1["dbma"] = df1["dbma"].apply(lambda x: round(x, 2))
+        if self.calculate_dbma:
+            df1 = self.dbma(df1)
 
         # Fix depth
-        df1["Depth (m)"] = df1["Depth (m)"] * -1
-        df1["Depth (ft)"] = df1["Depth (ft)"] * -1
-        df1["Depth to pipe center (m)"] = df1["Depth to pipe center (m)"] * -1
-        df1["Depth to pipe center (ft)"] = (
-            df1["Depth to pipe center (ft)"] * -1
-        )
+        if self.fix_depth:
+            df1["Depth (m)"] = df1["Depth (m)"] * -1
+            df1["Depth (ft)"] = df1["Depth (ft)"] * -1
+            df1["Depth to pipe center (m)"] = (
+                df1["Depth to pipe center (m)"] * -1
+            )
+            df1["Depth to pipe center (ft)"] = (
+                df1["Depth to pipe center (ft)"] * -1
+            )
 
         df1.reset_index(drop=True, inplace=True)
 
@@ -148,10 +165,13 @@ class PCM(CIPS):
             )
 
             # Current Loss Rate (CLR) as milliBels/meter (mB/m)
-            delta_dbma = df1.loc[index, "dbma"] - df1.loc[index - 1, "dbma"]
-            df1.loc[index, "Current Loss Rate"] = round(
-                abs(delta_dbma / distance) * 1000, 2
-            )
+            if self.calculate_current_loss_rate:
+                delta_dbma = (
+                    df1.loc[index, "dbma"] - df1.loc[index - 1, "dbma"]
+                )
+                df1.loc[index, "Current Loss Rate"] = round(
+                    abs(delta_dbma / distance) * 1000, 2
+                )
 
         df2 = pd.DataFrame(
             {"Survey Name": df1["Survey name (0-100)"].unique().tolist()}

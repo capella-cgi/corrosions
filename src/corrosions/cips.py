@@ -10,10 +10,12 @@ class CIPS:
         self,
         file_or_dir: str,
         overwrite: bool = False,
+        keep_original_filename: bool = False,
         verbose: bool = False,
     ):
         self.file_or_dir = file_or_dir
         self.overwrite = overwrite
+        self.keep_original_filename = keep_original_filename
         self.prefix = "cips"
         self.excel_dir = CIPS_EXCEL_DIR
         self.json_dir = CIPS_JSON_DIR
@@ -219,7 +221,12 @@ class CIPS:
         Returns:
             dict[str, Any]: processed file.
         """
-        _basename = get_basename(filename, sheet_name, prefix=self.prefix)
+        _basename = get_basename(
+            filename,
+            sheet_name,
+            prefix=self.prefix,
+            keep_original=self.keep_original_filename,
+        )
 
         excel_filepath = os.path.join(
             self.excel_dir, f"{slugify(_basename)}.xlsx"
