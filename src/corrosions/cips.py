@@ -79,36 +79,41 @@ class CIPS:
         Returns:
             pd.DataFrame: data extracted.
         """
-        if "Off Voltage" in df.columns:
-            # iccp - impress current cathodic protection
+        df["Voltage"] = df["Voltage"] * -1
+
+        # sacp - sacrificial anode cathodic protection
+        if pd.isna(df.iloc[0]["Off Potential (-mV)"]):
             df = df[
                 [
                     "Data No",
-                    "Off Voltage",
-                    "On Voltage",
+                    "Voltage",
                     "Latitude",
                     "Longitude",
                     "Comment",
                     "DCP/Feature/DCVG Anomaly",
                 ]
             ].copy(deep=True)
-            df["protection"] = "ICCP"
-            df.rename(columns={"Off Voltage": "Voltage"}, inplace=True)
+            df["Off Voltage"] = None
+            df["protection"] = "SACP"
             return df
 
-        # sacp - sacrificial anode cathodic protection
+        # iccp - impress current cathodic protection
         df = df[
             [
                 "Data No",
                 "Voltage",
+                "Off Voltage",
+                "Off Potential (-mV)",
                 "Latitude",
                 "Longitude",
                 "Comment",
                 "DCP/Feature/DCVG Anomaly",
             ]
         ].copy(deep=True)
-        df["On Voltage"] = None
-        df["protection"] = "SACP"
+        df["Off Voltage"] = df["Off Potential (-mV)"] / -1000
+        df.drop(columns=["Off Potential (-mV)"], inplace=True)
+        df["protection"] = "ICCP"
+
         return df
 
     @staticmethod
@@ -149,7 +154,7 @@ class CIPS:
 
         df["condition"] = df["Voltage"].apply(lambda x: self.condition(x))
         df["voltage_inverse"] = df["Voltage"] * -1
-        df["on_voltage_inverse"] = df["On Voltage"] * -1
+        df["off_voltage_inverse"] = df["Off Voltage"] * -1
 
         df["type"] = "PCM" if "4Hz Current (A)" in df.columns else "CIPS"
         df["interpolated"] = df["Latitude"].isna() & df["Longitude"].isna()
@@ -194,7 +199,22 @@ class CIPS:
         Returns:
             pd.DataFrame
         """
-        df.dropna(how="all", inplace=True)
+        for column in df.columns:
+            df.rename(
+                columns={
+                    column: column.strip(),
+                },
+                inplace=True,
+            )
+
+        df.dropna(how="all", ignore_index=True, inplace=True)
+
+        if "Segment" in df.columns:
+            df.drop(columns=["Segment"], inplace=True)
+
+        if "Segmen" in df.columns:
+            df.drop(columns=["Segmen"], inplace=True)
+
         df = df.drop_duplicates(
             subset=self.UNIQUE_COLUMNS, keep="last"
         ).reset_index(drop=True)

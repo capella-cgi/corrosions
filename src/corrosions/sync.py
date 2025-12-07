@@ -17,6 +17,7 @@ class Sync:
         normalized_cips_file: str,
         normalized_pcm_file: str,
         normalized_acvg_dcvg_file: Optional[str] = None,
+        is_synced: bool = False,
         output_dir: Optional[str] = None,
         verbose: bool = False,
     ):
@@ -33,6 +34,7 @@ class Sync:
         self._df_acvg_dcvg = pd.DataFrame()
         self._df_cips = pd.DataFrame()
         self._df_pcm = pd.DataFrame()
+        self.is_synced = is_synced
 
         self.output_dir = output_dir
 
@@ -342,6 +344,7 @@ class Sync:
                 print(
                     f"<{self.area} - {self.segment_code}>PCM and CIPS are sync"
                 )
+            self.is_synced = True
             return self
 
         if not self.cips_is_sync:

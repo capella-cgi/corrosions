@@ -20,6 +20,8 @@ dependencies = [
     "pip>=25.3",
     "python-slugify>=8.0.4",
     "xlsxwriter>=3.2.9",
+    "notebook>=7.5.0",
+    "ipython",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -27,6 +29,9 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
+
+[tool.uv]
+cache-dir = "./.uv_cache"
 
 [tool.black]
 line-length = 79

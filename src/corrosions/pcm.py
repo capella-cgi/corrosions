@@ -90,6 +90,23 @@ class PCM(CIPS):
 
         return df
 
+    def drop_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop empty row and duplicated columns.
+
+        Args:
+            df: pd.DataFrame
+
+        Returns:
+            pd.DataFrame
+        """
+        df.dropna(subset=["Index"], ignore_index=True, inplace=True)
+        df.dropna(how="all", ignore_index=True, inplace=True)
+        df = df.drop_duplicates(
+            subset=self.UNIQUE_COLUMNS, keep="last"
+        ).reset_index(drop=True)
+
+        return df
+
     def transform(
         self,
         df: pd.DataFrame,
@@ -124,7 +141,7 @@ class PCM(CIPS):
             inplace=True,
         )
 
-        if "Unnamed: 41" in df1.columns.tolist():
+        if "Unnamed: 41" in df1.columns:
             df1.drop(columns=["Unnamed: 41"], inplace=True)
 
         # Calculate dBmA
