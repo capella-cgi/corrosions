@@ -11,6 +11,7 @@ class CIPS:
         file_or_dir: str,
         overwrite: bool = False,
         keep_original_filename: bool = False,
+        sheet_name: Optional[str] = None,
         verbose: bool = False,
     ):
         self.file_or_dir = file_or_dir
@@ -19,6 +20,7 @@ class CIPS:
         self.prefix = "cips"
         self.excel_dir = CIPS_EXCEL_DIR
         self.json_dir = CIPS_JSON_DIR
+        self.sheet_name = sheet_name
         self.results = []
 
         self.COLUMNS_VALIDATED = [
@@ -79,9 +81,45 @@ class CIPS:
         Returns:
             pd.DataFrame: data extracted.
         """
-        df["Voltage"] = df["Voltage"] * -1
+        if "On Voltage" in df.columns:
+            df.rename(columns={"On Voltage": "Voltage"}, inplace=True)
+
+        if df.iloc[0]["Voltage"] > 0:
+            df["Voltage"] = df["Voltage"] * -1
+
+        # iccp without Off Potential (-mV)
+        if "Off Voltage" in df.columns:
+            df = df[
+                [
+                    "Data No",
+                    "Voltage",
+                    "Off Voltage",
+                    "Latitude",
+                    "Longitude",
+                    "Comment",
+                    "DCP/Feature/DCVG Anomaly",
+                ]
+            ].copy(deep=True)
+            df["protection"] = "ICCP"
+
+            return df
 
         # sacp - sacrificial anode cathodic protection
+        if "Off Voltage" not in df.columns:
+            df = df[
+                [
+                    "Data No",
+                    "Voltage",
+                    "Latitude",
+                    "Longitude",
+                    "Comment",
+                    "DCP/Feature/DCVG Anomaly",
+                ]
+            ].copy(deep=True)
+            df["Off Voltage"] = None
+            df["protection"] = "SACP"
+            return df
+
         if pd.isna(df.iloc[0]["Off Potential (-mV)"]):
             df = df[
                 [
@@ -304,8 +342,11 @@ class CIPS:
                 if self.verbose:
                     print(f"Processing file: {file}")
                 sheets = worksheets(file)
+                sheet_name = self.sheet_name
 
-                sheet_name = None
+                if sheet_name is not None:
+                    sheets = [sheet_name]
+
                 if self.check_sequential_file:
                     sheet_name = sequential_file(sheets)
 
@@ -315,7 +356,7 @@ class CIPS:
                         self.results.append(
                             {
                                 "success": False,
-                                "message": f"Missing Sequential File sheet",
+                                "message": f"Missing sheets: Data/Sequential File/Sheet1",
                                 "excel": file,
                                 "json": None,
                                 "sheet": None,

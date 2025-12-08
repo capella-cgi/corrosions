@@ -455,9 +455,9 @@ class Sync:
                 print(
                     f"<{self.area} - {self.segment_code}>Recalculating distance.."
                 )
-            self.recalculate_distance_cips().recalculate_distance_acvg_dcvg()
+            self.recalculate_distance_acvg_dcvg().recalculate_distance_cips()
             if self.verbose:
-                print(f"<{self.area} - {self.segment_code}>Sync is done.")
+                print(f"<{self.area} - {self.segment_code}>Sync is done.\n")
             return self
         if self.verbose:
             print(

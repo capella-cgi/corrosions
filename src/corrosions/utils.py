@@ -150,7 +150,7 @@ def save_df(df: pd.DataFrame, filepath: str, save_index: bool = True) -> str:
     Returns:
         str: excel file path.
     """
-    new_df = df.copy()
+    new_df = df
     new_df.to_excel(filepath, index=save_index)
     new_df.columns = rename_columns(df.columns.tolist())
     new_df.to_json(json_file(filepath), orient="records")

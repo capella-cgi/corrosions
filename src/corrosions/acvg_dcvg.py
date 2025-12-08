@@ -33,7 +33,6 @@ class AcvgDcvg(PCM):
             "ir_drop",
             "pipe_depth",
             "result_acvg",
-            "protection",
         ]
 
         self.UNIQUE_COLUMNS = ["latitude", "longitude"]

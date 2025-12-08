@@ -99,7 +99,9 @@ class PCM(CIPS):
         Returns:
             pd.DataFrame
         """
-        df.dropna(subset=["Index"], ignore_index=True, inplace=True)
+        if "Index" in df.columns:
+            df.dropna(subset=["Index"], ignore_index=True, inplace=True)
+
         df.dropna(how="all", ignore_index=True, inplace=True)
         df = df.drop_duplicates(
             subset=self.UNIQUE_COLUMNS, keep="last"
