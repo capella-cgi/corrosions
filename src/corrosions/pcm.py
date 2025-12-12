@@ -99,6 +99,9 @@ class PCM(CIPS):
         Returns:
             pd.DataFrame
         """
+        if "Distance" in df.columns:
+            df.drop(columns=["Distance"], inplace=True)
+
         if "Index" in df.columns:
             df.dropna(subset=["Index"], ignore_index=True, inplace=True)
 
@@ -128,7 +131,51 @@ class PCM(CIPS):
             str: normalized file.
         """
 
-        df1 = df.iloc[:, 0:41].copy()
+        df1 = df[
+            [
+                "Start Symbol",
+                "Format",
+                "Version",
+                "Index",
+                "PCMx Operating mode",
+                "Locator Frequency",
+                "Alpha display",
+                "Depth (m)",
+                "Depth (ft)",
+                "Depth to pipe center (m)",
+                "Depth to pipe center (ft)",
+                "dBuV",
+                "Locate current A",
+                "4 Hz Voltage phase",
+                "Signal strength",
+                "Gain (dB)",
+                "MF Foot attached",
+                "4Hz C-V Phase",
+                "4Hz Current (A)",
+                "Current 4-8Hz Phase",
+                "RTC day",
+                "RTC month",
+                "RTC year",
+                "UTC",
+                "RTC Updated flag",
+                "Int GPS mode",
+                "Int GPS Latitude",
+                "Int GPS Longitude",
+                "Int GPS Fix",
+                "Int GPS no. of satellites",
+                "Int GPS dilution",
+                "Int GPS altitude",
+                "Ext GPS Latitude",
+                "Ext GPS Longitude",
+                "Ext GPS Fix",
+                "Ext GPS no. of satellites",
+                "Ext GPS dilution",
+                "Ext GPS altitude",
+                "Pipe Diameter",
+                "Survey name (0-100)",
+                "Comment (0-100)",
+            ]
+        ]
         df1 = df1[
             (df["Int GPS Latitude"] != 0)
             & (df["Int GPS Longitude"] != 0)

@@ -210,6 +210,12 @@ class Sync:
     # PCM
     @property
     def first_pcm_latitude(self) -> float:
+        if "Int GPS Latitude" not in self.df_pcm.columns:
+            raise IndexError(
+                f"Int GPS Latitude not found in {self.normalized_pcm_file}\n"
+                f"columns: {self.df_pcm.columns}"
+            )
+
         return self.df_pcm.iloc[0]["Int GPS Latitude"]
 
     @property
