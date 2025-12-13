@@ -247,6 +247,8 @@ class CIPS:
 
         df.dropna(how="all", ignore_index=True, inplace=True)
 
+        df.dropna(subset=["Data No"], ignore_index=True, inplace=True)
+
         if "Segment" in df.columns:
             df.drop(columns=["Segment"], inplace=True)
 
@@ -304,31 +306,32 @@ class CIPS:
                 "sheet": sheet_name,
             }
 
-        try:
-            df = self.drop_columns(df)
+        # try:
+        df = self.drop_columns(df)
 
-            return {
-                "success": True,
-                "message": "File normalized",
-                "excel": self.transform(
-                    df,
-                    excel_filepath,
-                    sheet_name=sheet_name,
-                    json_filepath=json_filepath,
-                ),
-                "json": json_filepath,
-                "sheet": sheet_name,
-            }
-        except Exception as e:
-            if self.verbose:
-                raise Exception(e)
-            return {
-                "success": False,
-                "message": e,
-                "excel": filename,
-                "json": json_filepath,
-                "sheet": None,
-            }
+        return {
+            "success": True,
+            "message": "File normalized",
+            "excel": self.transform(
+                df,
+                excel_filepath,
+                sheet_name=sheet_name,
+                json_filepath=json_filepath,
+            ),
+            "json": json_filepath,
+            "sheet": sheet_name,
+        }
+
+    # except Exception as e:
+    #     if self.verbose:
+    #         raise Exception(e)
+    #     return {
+    #         "success": False,
+    #         "message": e,
+    #         "excel": filename,
+    #         "json": json_filepath,
+    #         "sheet": None,
+    #     }
 
     def create_dir(self) -> Self:
         os.makedirs(self.excel_dir, exist_ok=True)

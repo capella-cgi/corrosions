@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import math
+import numpy as np
 from slugify import slugify
 from typing import List
 
@@ -156,3 +157,21 @@ def save_df(df: pd.DataFrame, filepath: str, save_index: bool = True) -> str:
     new_df.to_json(json_file(filepath), orient="records")
 
     return filepath
+
+
+def validate_numeric(value) -> float | None:
+    """Validate numeric value.
+
+    Args:
+        value: String, float, nan, or none.
+
+    Returns:
+        float | None: numeric value.
+    """
+    if isinstance(value, float):
+        return value
+    if isinstance(value, str):
+        return np.nan
+    if pd.isna(value):
+        return np.nan
+    return float(value)

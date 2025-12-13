@@ -1,6 +1,7 @@
 from typing import Optional
 import pandas as pd
 import numpy as np
+from glob import glob
 from .cips import CIPS
 from .const import *
 from .utils import *
@@ -34,6 +35,15 @@ class PCM(CIPS):
         ]
 
         self.UNIQUE_COLUMNS = ["Int GPS Latitude", "Int GPS Longitude"]
+        self.NUMERIC_COLUMNS = [
+            "Index",
+            "4Hz Current (A)",
+            "Int GPS Latitude",
+            "Int GPS Longitude",
+            "Ext GPS Latitude",
+            "Ext GPS Longitude",
+            "Gain (dB)",
+        ]
 
         self.check_sequential_file = True
         self.excel_dir = PCM_EXCEL_DIR
@@ -89,6 +99,28 @@ class PCM(CIPS):
         df["dbma"] = df["dbma"].apply(lambda x: round(x, 2))
 
         return df
+
+    @staticmethod
+    def calculate_condition(file_or_dir: str, filter_value: float = 200):
+        files = []
+        if os.path.isfile(file_or_dir):
+            files.append(file_or_dir)
+
+        if os.path.isdir(file_or_dir):
+            files = glob(os.path.join(file_or_dir, "*.xlsx"))
+
+        for file in files:
+            df = pd.read_excel(file)
+            df["Condition"] = df.apply(
+                lambda row: (
+                    "Medium to High"
+                    if row["Current Loss Rate"] <= 50
+                    else "Medium to Poor"
+                ),
+                axis=1,
+            )
+            save_df(df, file, save_index=False)
+            print(f"Updated: {file}")
 
     def drop_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Drop empty row and duplicated columns.
@@ -189,6 +221,11 @@ class PCM(CIPS):
             ],
             inplace=True,
         )
+
+        for numeric_column in self.NUMERIC_COLUMNS:
+            df1.loc[:, numeric_column] = df[numeric_column].apply(
+                validate_numeric
+            )
 
         if "Unnamed: 41" in df1.columns:
             df1.drop(columns=["Unnamed: 41"], inplace=True)

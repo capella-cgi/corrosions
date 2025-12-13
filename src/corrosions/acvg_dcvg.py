@@ -11,12 +11,14 @@ class AcvgDcvg(PCM):
     def __init__(
         self,
         file_or_dir: str,
+        segment_code: Optional[str] = None,
         overwrite: bool = False,
         verbose: bool = False,
     ):
         super().__init__(file_or_dir, overwrite, verbose)
 
         self.prefix = "acvg_dcvg"
+        self.segment_code = segment_code
 
         self.COLUMNS_VALIDATED = [
             "segment_code",
@@ -187,6 +189,9 @@ class AcvgDcvg(PCM):
 
         try:
             writer = pd.ExcelWriter(excel_filepath, engine="xlsxwriter")
+
+            if self.segment_code is not None:
+                df_acvg_dcvg["segment_code"] = self.segment_code
 
             df_acvg_dcvg["survey_dcvg"] = df_acvg_dcvg["survey_dcvg"].apply(
                 lambda x: x.strftime("%Y-%m-%d") if not pd.isnull(x) else None
