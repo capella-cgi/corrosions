@@ -22,6 +22,7 @@ class CIPS:
         self.json_dir = CIPS_JSON_DIR
         self.sheet_name = sheet_name
         self.results = []
+        self.protections = []
 
         self.COLUMNS_VALIDATED = [
             "Data No",
@@ -71,8 +72,7 @@ class CIPS:
 
         return True, missing_columns
 
-    @staticmethod
-    def transform_df(df: pd.DataFrame) -> pd.DataFrame:
+    def transform_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extract data from a file.
 
         Args:
@@ -89,20 +89,21 @@ class CIPS:
 
         # iccp without Off Potential (-mV)
         if "Off Voltage" in df.columns:
-            df = df[
-                [
-                    "Data No",
-                    "Voltage",
-                    "Off Voltage",
-                    "Latitude",
-                    "Longitude",
-                    "Comment",
-                    "DCP/Feature/DCVG Anomaly",
-                ]
-            ].copy(deep=True)
-            df["protection"] = "ICCP"
-
-            return df
+            if abs(df["Off Voltage"].sum()) > 0:
+                df = df[
+                    [
+                        "Data No",
+                        "Voltage",
+                        "Off Voltage",
+                        "Latitude",
+                        "Longitude",
+                        "Comment",
+                        "DCP/Feature/DCVG Anomaly",
+                    ]
+                ].copy(deep=True)
+                df["protection"] = "ICCP"
+                self.protections.append("ICCP")
+                return df
 
         # sacp - sacrificial anode cathodic protection
         if "Off Voltage" not in df.columns:
@@ -118,6 +119,7 @@ class CIPS:
             ].copy(deep=True)
             df["Off Voltage"] = None
             df["protection"] = "SACP"
+            self.protections.append("SACP")
             return df
 
         if pd.isna(df.iloc[0]["Off Potential (-mV)"]):
@@ -133,6 +135,7 @@ class CIPS:
             ].copy(deep=True)
             df["Off Voltage"] = None
             df["protection"] = "SACP"
+            self.protections.append("SACP")
             return df
 
         # iccp - impress current cathodic protection
@@ -190,7 +193,15 @@ class CIPS:
         """
         df = self.transform_df(df)
 
-        df["condition"] = df["Voltage"].apply(lambda x: self.condition(x))
+        # SACP use On Voltage/Voltage
+        voltage_column = "Voltage"
+        if df.loc[0, "protection"] == "ICCP":
+            # ICCP use Off Voltage
+            voltage_column = "Off Voltage"
+            if df.iloc[0][voltage_column] > 0:
+                df[voltage_column] = df[voltage_column] * -1
+
+        df["condition"] = df[voltage_column].apply(lambda x: self.condition(x))
         df["voltage_inverse"] = df["Voltage"] * -1
         df["off_voltage_inverse"] = df["Off Voltage"] * -1
 

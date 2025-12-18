@@ -235,7 +235,7 @@ class PCM(CIPS):
             df1 = self.dbma(df1)
 
         # Fix depth
-        if self.fix_depth and df1.loc[0, "Depth (m)"] > 0:
+        if self.fix_depth and (df1.iloc[0]["Depth (m)"] > 0):
             df1["Depth (m)"] = df1["Depth (m)"] * -1
             df1["Depth (ft)"] = df1["Depth (ft)"] * -1
             df1["Depth to pipe center (m)"] = (

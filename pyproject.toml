@@ -22,6 +22,7 @@ dependencies = [
     "xlsxwriter>=3.2.9",
     "notebook>=7.5.0",
     "ipython",
+    "pypalettes>=0.2.1",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",

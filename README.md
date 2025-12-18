@@ -4,7 +4,7 @@
 
 ### How to
 1. Extract indirects > run `data-2025.ipynb`
-2. Check `files.xlsx`
+2. Check `/tests/files.xlsx`
 3. Run `all.ipynb`
 4. Run `sync.ipynb`
 5. Run `calculate-stats.ipynb`
