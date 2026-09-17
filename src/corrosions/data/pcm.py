@@ -93,10 +93,8 @@ class PCM:
         self.df = df
         self.year = year
         self.output_dir = resolve_output_dir(output_dir)
-        self.cleaned_dir = os.path.join(
-            self.output_dir, "cleaned", str(year), "PCM FINAL"
-        )
-        self.cleaned: bool = False
+        self.cleaned_dir = os.path.join(self.output_dir, "cleaned", str(year), "PCM")
+        self.cleaned_path: str | None = None
         self.verbose = verbose
 
     def clean(self) -> Self:
@@ -123,7 +121,6 @@ class PCM:
             any_numeric_empty = pd.Series(False, index=self.df.index)
 
         self.df = self.df.loc[~(all_empty | any_numeric_empty)]
-        self.cleaned = True
         self.save()
 
         return self
@@ -131,10 +128,9 @@ class PCM:
     def save(self) -> Self:
         """Save the current DataFrame under ``cleaned_dir``.
 
-        Writes ``self.df`` to
-        ``{cleaned_dir}/{year}/PCM FINAL/{original_filename}``, preserving the
-        source Excel's basename. Creates the destination directory if it does
-        not already exist.
+        Writes ``self.df`` to ``{cleaned_dir}/{original_filename}``, preserving
+        the source Excel's basename. Creates the destination directory if it
+        does not already exist.
 
         Returns:
             PCM: ``self``, to allow method chaining.
@@ -148,6 +144,7 @@ class PCM:
         filename = os.path.basename(self.filepath)
         target_path = os.path.join(self.cleaned_dir, filename)
         self.df.to_excel(target_path, index=False)
+        self.cleaned_path = target_path
 
         return self
 
@@ -174,12 +171,10 @@ class PCM:
             >>> pcm.check()
             {'filepath': '...', 'is_valid': True, 'n_missing': 0, ...}
         """
-        filepath = self.filepath
         cleaned_path = os.path.join(self.cleaned_dir, os.path.basename(self.filepath))
         if os.path.isfile(cleaned_path):
             self.df = pd.read_excel(cleaned_path)
-            filepath = cleaned_path
-            self.cleaned = True
+            self.cleaned_path = cleaned_path
         else:
             self.clean()
 
@@ -197,7 +192,7 @@ class PCM:
             duplicates = []
 
         return {
-            "filepath": filepath,
+            "filepath": cleaned_path,
             "is_valid": not missing_columns and not duplicates,
             "n_missing": len(missing_columns),
             "n_duplicates": len(duplicates),

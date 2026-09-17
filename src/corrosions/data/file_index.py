@@ -251,7 +251,7 @@ class FileIndex:
 
         Rechecks file existence against ``source_dir``, applies ``fix()`` if not
         already applied, then copies every existing referenced file into
-        ``<output_dir>/<destination_dir>/<Year>/<data_type> FINAL/``.
+        ``<output_dir>/<destination_dir>/<Year>/<data_type>/``.
         Existing destination files are skipped.
 
         Args:
@@ -294,7 +294,7 @@ class FileIndex:
                 )
 
                 destination_dir_year = os.path.join(
-                    destination_dir, year, f"{data_type} FINAL"
+                    destination_dir, year, data_type
                 )
                 os.makedirs(destination_dir_year, exist_ok=True)
 
@@ -341,7 +341,7 @@ class FileIndex:
 
         def _check_row(row: pd.Series) -> dict:
             year = int(row["Year"])
-            filepath = os.path.join(data_dir, str(year), "PCM FINAL", row["PCM"])
+            filepath = os.path.join(data_dir, str(year), "PCM", row["PCM"])
             if not os.path.isfile(filepath):
                 return {
                     "year": year,
