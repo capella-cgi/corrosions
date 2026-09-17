@@ -1,4 +1,5 @@
 import os
+from typing import Self
 
 import pandas as pd
 
@@ -92,7 +93,63 @@ class PCM:
         self.df = df
         self.year = year
         self.output_dir = resolve_output_dir(output_dir)
+        self.cleaned_dir = os.path.join(
+            self.output_dir, "cleaned", str(year), "PCM FINAL"
+        )
+        self.cleaned: bool = False
         self.verbose = verbose
+
+    def clean(self) -> Self:
+        """Drop empty rows from the DataFrame.
+
+        Removes any row that either has all values empty across every column
+        or has any ``NaN`` in the columns listed in ``NUMERIC_COLUMNS`` (limited
+        to those actually present in the DataFrame). Mutates ``self.df`` in
+        place and sets ``self.cleaned`` to ``True``.
+
+        Returns:
+            PCM: ``self``, to allow method chaining.
+
+        Example:
+            >>> pcm = PCM("data/2024/PCM FINAL/segment-01.xlsx", year=2024)
+            >>> pcm.clean()
+        """
+        all_empty = self.df.isna().all(axis=1)
+
+        numeric_present = [c for c in self.NUMERIC_COLUMNS if c in self.df.columns]
+        if numeric_present:
+            any_numeric_empty = self.df[numeric_present].isna().any(axis=1)
+        else:
+            any_numeric_empty = pd.Series(False, index=self.df.index)
+
+        self.df = self.df.loc[~(all_empty | any_numeric_empty)]
+        self.cleaned = True
+        self.save()
+
+        return self
+
+    def save(self) -> Self:
+        """Save the current DataFrame under ``cleaned_dir``.
+
+        Writes ``self.df`` to
+        ``{cleaned_dir}/{year}/PCM FINAL/{original_filename}``, preserving the
+        source Excel's basename. Creates the destination directory if it does
+        not already exist.
+
+        Returns:
+            PCM: ``self``, to allow method chaining.
+
+        Example:
+            >>> pcm = PCM("data/2024/PCM FINAL/segment-01.xlsx", year=2024)
+            >>> pcm.clean().save()
+        """
+        os.makedirs(self.cleaned_dir, exist_ok=True)
+
+        filename = os.path.basename(self.filepath)
+        target_path = os.path.join(self.cleaned_dir, filename)
+        self.df.to_excel(target_path, index=False)
+
+        return self
 
     def check(self) -> dict:
         """Run data-quality checks and return a summary dict.
@@ -117,6 +174,15 @@ class PCM:
             >>> pcm.check()
             {'filepath': '...', 'is_valid': True, 'n_missing': 0, ...}
         """
+        filepath = self.filepath
+        cleaned_path = os.path.join(self.cleaned_dir, os.path.basename(self.filepath))
+        if os.path.isfile(cleaned_path):
+            self.df = pd.read_excel(cleaned_path)
+            filepath = cleaned_path
+            self.cleaned = True
+        else:
+            self.clean()
+
         missing_columns = [c for c in self.COLUMNS if c not in self.df.columns]
 
         unique_cols = [c for c in self.UNIQUE_COLUMNS if c in self.df.columns]
@@ -131,10 +197,10 @@ class PCM:
             duplicates = []
 
         return {
-            "filepath": self.filepath,
+            "filepath": filepath,
             "is_valid": not missing_columns and not duplicates,
             "n_missing": len(missing_columns),
             "n_duplicates": len(duplicates),
-            "missing_columns": missing_columns,
-            "duplicates": duplicates,
+            "missing_columns": None if len(missing_columns) == 0 else missing_columns,
+            "duplicates": None if len(duplicates) == 0 else duplicates,
         }

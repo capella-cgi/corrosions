@@ -335,8 +335,8 @@ class FileIndex:
         empty_result = {
             "n_missing": None,
             "n_duplicates": None,
-            "missing_columns": [],
-            "duplicates": [],
+            "missing_columns": None,
+            "duplicates": None,
         }
 
         def _check_row(row: pd.Series) -> dict:
@@ -353,7 +353,7 @@ class FileIndex:
 
             try:
                 pcm = PCM(filepath, year=year)
-                return {"year": year, **pcm.check(), "reason": ""}
+                return {"year": year, **pcm.check(), "reason": None}
             except Exception as e:
                 return {
                     "year": year,
