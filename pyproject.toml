@@ -1,63 +1,50 @@
 [build-system]
-requires = ["uv_build>=0.9.8,<0.10.0"]
+requires = ["uv_build<0.12"]
 build-backend = "uv_build"
 
 [project]
 name = "corrosions"
-version = "0.1.0"
+version = "0.3.0"
 authors = [
     {name = "Martanto", email = "martanto@live.com"},
 ]
 description = "Corrosion calculation created by Capella Global Innovation"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "black>=25.9.0",
-    "isort>=7.0.0",
-    "matplotlib>=3.10.7",
+    "loguru>=0.7.3",
     "openpyxl>=3.1.5",
     "pandas>=2.3.3",
-    "pip>=25.3",
+    "python-dotenv>=1.2.3",
     "python-slugify>=8.0.4",
-    "xlsxwriter>=3.2.9",
-    "notebook>=7.5.0",
-    "ipython",
-    "pypalettes>=0.2.1",
 ]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 
-[tool.uv]
-cache-dir = "./.uv_cache"
-
-[tool.black]
-line-length = 79
-target-version = ['py311', 'py312']
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | \.uv_cache
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
-
-[tool.isort]
-profile = "black"
-line_length = 79
-skip = [
-    ".venv",
-    ".uv_cache",
+[dependency-groups]
+dev = [
+    "uv-build",
+    "ruff",
+    "ty",
+    "ipykernel",
+    "notebook",
+    "pytest",
+    "ipywidgets",
+    "pandas-stubs~=3.0.3",
+    "pip",
 ]
+
+[tool.uv]
+cache-dir = "./.cache/uv"
+
+[project.urls]
+Repository    = "https://github.com/capella-cgi/corrosions"
+Documentation = "https://github.com/capella-cgi/corrosions/wiki"
+Changelog     = "https://github.com/capella-cgi/corrosions/releases"
+Issues        = "https://github.com/capella-cgi/corrosions/issues"
