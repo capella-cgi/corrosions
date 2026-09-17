@@ -16,10 +16,11 @@ import shutil
 from typing import Self
 
 import pandas as pd
+from joblib import Parallel, delayed
 from slugify import slugify
 
-from corrosions.data.pcm import PCM
 from corrosions.logging import logger
+from corrosions.data.pcm import PCM
 from corrosions.utils.path_utils import resolve_output_dir
 
 
@@ -314,18 +315,22 @@ class FileIndex:
 
         return self
 
-    def check_pcm_quality(self, data_dir: str) -> pd.DataFrame:
+    def check_pcm_quality(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Run PCM data-quality checks on every referenced PCM file.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned data files.
+            n_jobs (int): Number of parallel workers to use via joblib's ``loky``
+                backend. ``1`` runs sequentially, ``-1`` uses all available cores.
+                Defaults to ``1``.
 
         Returns:
-            pd.DataFrame: One row per index entry with columns ``filepath``,
-                ``is_valid``, ``reason``, ``n_missing``, ``n_duplicates``,
-                ``missing_columns``, and ``duplicates``. Rows with a missing
-                filename, a missing file on disk, or a load error are recorded
-                as ``is_valid=False`` with a populated ``reason``.
+            pd.DataFrame: One row per index entry with columns ``year``,
+                ``filepath``, ``is_valid``, ``reason``, ``n_missing``,
+                ``n_duplicates``, ``missing_columns``, and ``duplicates``. Rows
+                with a missing filename, a missing file on disk, or a load
+                error are recorded as ``is_valid=False`` with a populated
+                ``reason``.
         """
         empty_result = {
             "n_missing": None,
@@ -333,55 +338,45 @@ class FileIndex:
             "missing_columns": [],
             "duplicates": [],
         }
-        results = []
 
-        for _, row in self.df.iterrows():
-            if pd.isna(row["PCM"]):
-                results.append(
-                    {
-                        "filepath": None,
-                        "is_valid": False,
-                        "reason": "no PCM filename in index",
-                        **empty_result,
-                    }
-                )
-                continue
-
-            filepath = os.path.join(
-                data_dir, str(row["Year"]), "PCM FINAL", row["PCM"]
-            )
+        def _check_row(row: pd.Series) -> dict:
+            year = int(row["Year"])
+            filepath = os.path.join(data_dir, str(year), "PCM FINAL", row["PCM"])
             if not os.path.isfile(filepath):
-                results.append(
-                    {
-                        "filepath": filepath,
-                        "is_valid": False,
-                        "reason": "file not found on disk",
-                        **empty_result,
-                    }
-                )
-                continue
+                return {
+                    "year": year,
+                    "filepath": filepath,
+                    "is_valid": False,
+                    "reason": "file not found on disk",
+                    **empty_result,
+                }
 
             try:
-                pcm = PCM(filepath, year=int(row["Year"]))
-                results.append({**pcm.check(), "reason": ""})
+                pcm = PCM(filepath, year=year)
+                return {"year": year, **pcm.check(), "reason": ""}
             except Exception as e:
-                results.append(
-                    {
-                        "filepath": filepath,
-                        "is_valid": False,
-                        "reason": f"{type(e).__name__}: {e}",
-                        **empty_result,
-                    }
-                )
+                return {
+                    "year": year,
+                    "filepath": filepath,
+                    "is_valid": False,
+                    "reason": f"{type(e).__name__}: {e}",
+                    **empty_result,
+                }
+
+        rows = [row for _, row in self.df.iterrows() if pd.notna(row["PCM"])]
+        results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_check_row)(row) for row in rows
+        )
 
         columns = [
+            "year",
             "filepath",
             "is_valid",
-            "reason",
             "n_missing",
             "n_duplicates",
             "missing_columns",
             "duplicates",
+            "reason",
         ]
         return pd.DataFrame(results, columns=columns)
 
