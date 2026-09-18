@@ -17,6 +17,10 @@ class PCM:
         COLUMNS (list[str]): Required columns expected in the source Excel.
         NUMERIC_COLUMNS (list[str]): Columns coerced to numeric via
             ``pd.to_numeric(..., errors="coerce")`` at load time.
+        CLEAN_REQUIRED_COLUMNS (list[str]): Columns whose presence and
+            non-NaN value is required for a row to survive ``clean``. Excludes
+            ``Ext GPS Latitude`` / ``Ext GPS Longitude`` because they are
+            frequently blank in real PCM exports.
         UNIQUE_COLUMNS (tuple[str, str]): Columns whose combination must be
             unique across rows (used by ``check`` to flag duplicates).
         filepath (str): Path to the source Excel file.
@@ -46,8 +50,13 @@ class PCM:
         "4Hz Current (A)",
         "Int GPS Latitude",
         "Int GPS Longitude",
-        "Ext GPS Latitude",
-        "Ext GPS Longitude",
+        "Gain (dB)",
+    ]
+
+    CLEAN_REQUIRED_COLUMNS: list[str] = [
+        "4Hz Current (A)",
+        "Int GPS Latitude",
+        "Int GPS Longitude",
         "Gain (dB)",
     ]
 
@@ -101,26 +110,38 @@ class PCM:
         """Drop empty rows from the DataFrame.
 
         Removes any row that either has all values empty across every column
-        or has any ``NaN`` in the columns listed in ``NUMERIC_COLUMNS`` (limited
-        to those actually present in the DataFrame). Mutates ``self.df`` in
-        place and sets ``self.cleaned`` to ``True``.
+        or has any ``NaN`` in the columns listed in ``CLEAN_REQUIRED_COLUMNS``
+        (limited to those actually present in the DataFrame). ``Ext GPS
+        Latitude`` and ``Ext GPS Longitude`` are intentionally excluded — they
+        are sparse in typical PCM exports and dropping on them removes almost
+        every row.
 
         Returns:
             PCM: ``self``, to allow method chaining.
+
+        Raises:
+            ValueError: If the cleaned DataFrame is empty (no row satisfied
+                ``CLEAN_REQUIRED_COLUMNS``), which usually means the source
+                file is malformed or the required columns are missing.
 
         Example:
             >>> pcm = PCM("data/2024/PCM FINAL/segment-01.xlsx", year=2024)
             >>> pcm.clean()
         """
-        all_empty = self.df.isna().all(axis=1)
+        required_present = [
+            c for c in self.CLEAN_REQUIRED_COLUMNS if c in self.df.columns
+        ]
 
-        numeric_present = [c for c in self.NUMERIC_COLUMNS if c in self.df.columns]
-        if numeric_present:
-            any_numeric_empty = self.df[numeric_present].isna().any(axis=1)
-        else:
-            any_numeric_empty = pd.Series(False, index=self.df.index)
+        self.df = self.df.dropna(how="all")
+        if required_present:
+            self.df = self.df.dropna(subset=required_present)
 
-        self.df = self.df.loc[~(all_empty | any_numeric_empty)]
+        if self.df.empty:
+            raise ValueError(
+                f"Cleaned DataFrame is empty after applying CLEAN_REQUIRED_COLUMNS "
+                f"({self.CLEAN_REQUIRED_COLUMNS}) to {self.filepath}"
+            )
+
         self.save()
 
         return self
