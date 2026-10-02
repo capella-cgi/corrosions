@@ -43,8 +43,11 @@ src/corrosions/
 ├── logging.py          # loguru-based logging setup and helpers
 ├── data/
 │   ├── file_index.py   # FileIndex: Excel index of CIPS/PCM files
-│   └── pcm.py          # PCM: single PCM survey loader + QA
+│   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline
+│   ├── pcm.py          # PCM(BaseData): single PCM survey file
+│   └── cips.py         # CIPS(BaseData): single CIPS survey file
 └── utils/
+    ├── dataframe_utils.py  # get_sheets / get_sheet_columns helpers
     └── path_utils.py   # resolve_output_dir helper
 ```
 

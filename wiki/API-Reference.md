@@ -7,7 +7,10 @@ their fully qualified paths shown in each section.
 - [`corrosions`](#corrosions) — package metadata
 - [`corrosions.logging`](#corrosionslogging) — logging configuration
 - [`corrosions.data.file_index`](#corrosionsdatafile_index) — `FileIndex`
+- [`corrosions.data.base_data`](#corrosionsdatabase_data) — `BaseData`
 - [`corrosions.data.pcm`](#corrosionsdatapcm) — `PCM`
+- [`corrosions.data.cips`](#corrosionsdatacips) — `CIPS`
+- [`corrosions.utils.dataframe_utils`](#corrosionsutilsdataframe_utils) — Excel sheet helpers
 - [`corrosions.utils.path_utils`](#corrosionsutilspath_utils) — path helpers
 
 ---
@@ -182,8 +185,10 @@ Returns `self` for chaining.
 
 #### `check_pcm_quality(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
-Run [`PCM.check`](#check---dict) on every referenced PCM file, in parallel via
-joblib's `loky` backend when `n_jobs > 1` (or `-1` for all cores).
+Run `PCM(...).clean().save().check()` on every referenced PCM file, in
+parallel via joblib's `loky` backend when `n_jobs > 1` (or `-1` for all
+cores). Each cleaned copy is written to `output/cleaned/<year>/PCM/`, and
+the report describes the cleaned data.
 
 Returns a DataFrame with one row per index entry and columns:
 
@@ -198,6 +203,26 @@ Returns a DataFrame with one row per index entry and columns:
 | `duplicates` | Duplicate row records. |
 | `reason` | Populated when the row failed to load (missing file, exception, …). |
 
+#### `check_cips_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
+
+Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
+file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
+backend like `check_pcm_quality`. The data sheet is located, column names
+are aligned, then checked. Nothing is cleaned or saved.
+
+| Column | Description |
+| --- | --- |
+| `year` | Survey year for the row. |
+| `filepath` | Full path to the referenced CIPS file. |
+| `is_valid` | `True` when no required column is missing and a voltage column exists. Duplicates do not count. |
+| `sheet_name` | Sheet that was loaded. |
+| `candidate_sheets` | Every qualifying sheet, best match first. |
+| `has_altitude` | `Altitude` column present (also required). |
+| `has_voltage` | At least one of `On Voltage`, `Off Voltage`, `Voltage` present. |
+| `n_missing` / `missing_columns` | Required columns missing after `fix()`. |
+| `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
+| `reason` | Populated when the file is missing, has no data sheet, or fails to load. |
+
 #### `save(output_dir: str | None = None) -> None`
 
 Write the current `df` to `<output_dir>/file_index_<filename_slug>.csv`.
@@ -211,90 +236,254 @@ from corrosions.data.file_index import FileIndex
 index = FileIndex("IDDA - File List.xlsx", verbose=True)
 index.rebuild(source_dir="//nas/surveys", destination_dir="data")
 report = index.check_pcm_quality("output/data", n_jobs=-1)
+cips_report = index.check_cips_file("output/raw_data", n_jobs=-1)
 ```
 
 ---
 
-## `corrosions.data.pcm`
+## `corrosions.data.base_data`
 
-Single-file Pipeline Current Mapping (PCM) survey reader.
+### `class BaseData`
 
-### `class PCM`
+Shared load / check / clean / save pipeline for one survey Excel file.
+Subclasses ([`PCM`](#corrosionsdatapcm), [`CIPS`](#corrosionsdatacips))
+declare their schema through class attributes and inherit a fluent pipeline:
 
-Loads one PCM Excel export, coerces its numeric columns, and exposes cleaning
-and data-quality helpers.
+```python
+PCM("data/2024/PCM/segment-01.xlsx", year=2024).check().clean().save()
+```
 
-#### Class attributes
+Every pipeline method returns `self`, so steps can run in any order.
+`check()` reports on whatever `df` holds at the moment it is called: call it
+before `clean()` to check the raw data and after to check the cleaned data.
+
+#### Class attributes (set by subclasses)
 
 | Attribute | Type | Purpose |
 | --- | --- | --- |
-| `COLUMNS` | `list[str]` | Required columns expected in the source Excel: `Index`, `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Ext GPS Latitude`, `Ext GPS Longitude`, `Survey name (0-100)`, `Gain (dB)`. |
+| `KIND` | `Literal["pcm", "cips"]` | Survey type; names the cleaned output sub-directory (upper-cased). |
+| `REQUIRED_COLUMNS` | `list[str]` | Columns expected in the source Excel, checked by `check()`. |
 | `NUMERIC_COLUMNS` | `list[str]` | Columns coerced with `pd.to_numeric(..., errors="coerce")` at load time. |
-| `UNIQUE_COLUMNS` | `tuple[str, str]` | `("Int GPS Latitude", "Int GPS Longitude")` — the pair whose combination must be unique. |
+| `CLEAN_REQUIRED_COLUMNS` | `list[str]` | Columns whose non-NaN value is required for a row to survive `clean()`. |
+| `UNIQUE_COLUMNS` | `tuple[str, str]` | The (latitude, longitude) pair. `check()` counts rows sharing a pair; `clean()` drops rows where either is `0` and keeps the first row of each pair. |
 
 #### Instance attributes
 
 | Attribute | Type | Description |
 | --- | --- | --- |
 | `filepath` | `str` | Path to the source Excel file. |
+| `sheet_name` | `int \| str` | Sheet loaded into `df`, chosen by `find_sheet`. |
 | `df` | `pd.DataFrame` | Working DataFrame with numeric columns coerced. |
 | `year` | `int` | Survey year for this file. |
 | `output_dir` | `str` | Resolved output directory. |
-| `cleaned_dir` | `str` | Destination for cleaned output: `<output_dir>/cleaned/<year>/PCM`. |
-| `cleaned_path` | `str \| None` | Path of the cleaned Excel once saved. |
-| `verbose` | `bool` | If `True`, downstream methods may emit progress messages. |
+| `cleaned_dir` | `str` | `<output_dir>/cleaned/<year>/<KIND>`. |
+| `cleaned_path` | `str \| None` | Path of the saved Excel once `save()` ran. |
+| `report` | `dict` | Summary from the last `check()` call; empty until then. |
+| `verbose` | `bool` | If `True`, methods may emit progress messages. |
 
 #### `__init__(filepath, year, output_dir=None, verbose=False)`
 
-Load the Excel file and coerce every numeric column that is present.
+Load the sheet returned by `find_sheet(filepath)`, strip whitespace from
+column names (as `get_sheet_columns` does), and coerce every
+`NUMERIC_COLUMNS` entry that is present.
 
-- **`filepath`** *(str)* — path to the source PCM Excel file.
+- **`filepath`** *(str)* — path to the source Excel file.
 - **`year`** *(int)* — survey year.
 - **`output_dir`** *(str | None)* — defaults to `<cwd>/output` via
   `resolve_output_dir`.
-- **`verbose`** *(bool)* — enables progress logging in downstream methods.
-- **Raises** `FileNotFoundError` if `filepath` does not exist.
+- **`verbose`** *(bool)* — enables progress logging.
+- **Raises** `FileNotFoundError` if `filepath` does not exist, or
+  `ValueError` if `find_sheet` finds no usable sheet.
 
-#### `clean() -> Self`
+#### `find_sheet(filepath: str) -> int | str` *(classmethod)*
 
-Drop rows that are empty across every column or that contain any `NaN` in the
-`NUMERIC_COLUMNS` actually present. Mutates `self.df` in place and calls
-`save()`. Returns `self` for chaining.
+Return the sheet holding the survey data. The default is `0` (first sheet);
+`CIPS` overrides it.
 
-#### `save() -> Self`
+#### `check() -> Self`
 
-Write the current `df` to `<cleaned_dir>/<original_filename>`, creating
-`cleaned_dir` if needed, and set `self.cleaned_path`. Returns `self` for
-chaining.
+Check the current `df` and store the summary on `self.report`. Nothing is
+raised. The check confirms that every column in `REQUIRED_COLUMNS` is present
+and that rows are unique on `UNIQUE_COLUMNS`.
 
-#### `check() -> dict`
-
-Run data-quality checks and return a summary.
-
-Behavior:
-
-1. If a previously cleaned copy exists at
-   `<cleaned_dir>/<original_filename>`, it is loaded from disk. Otherwise,
-   `clean()` is run.
-2. Checks that every column in `COLUMNS` is present.
-3. Checks that rows are unique on `UNIQUE_COLUMNS`.
-
-Returned keys:
+`report` keys:
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `filepath` | `str` | Path to the cleaned file used for checks. |
+| `filepath` | `str` | Source file path. |
+| `sheet_name` | `int \| str` | Sheet the data was loaded from. |
 | `is_valid` | `bool` | `True` when there are no missing columns and no duplicates. |
 | `n_missing` | `int` | Count of missing required columns. |
 | `n_duplicates` | `int` | Count of duplicate rows by `UNIQUE_COLUMNS`. |
 | `missing_columns` | `list[str] \| None` | Names of missing required columns (or `None` when none). |
 | `duplicates` | `list[dict] \| None` | One dict per duplicate row (`row` index + unique-column values), or `None` when none. |
 
+#### `clean() -> Self`
+
+Drop unusable rows, in order (each step uses only the columns present):
+
+1. Rows empty across every column.
+2. Rows whose latitude or longitude (`UNIQUE_COLUMNS`) is `0` (no GPS fix).
+3. Rows with any `NaN` in `CLEAN_REQUIRED_COLUMNS`. These include the
+   coordinates, so rows with an empty latitude or longitude go here.
+4. Duplicate `UNIQUE_COLUMNS` rows, keeping the first reading at each
+   position.
+
+Mutates `self.df`. It does **not** save; chain `.save()` to write the result.
+
+- **Raises** `ValueError` if no row is left.
+
+#### `save() -> Self`
+
+Write the current `df` to `<cleaned_dir>/<original_filename>`, creating
+`cleaned_dir` if needed, and set `self.cleaned_path`.
+
+---
+
+## `corrosions.data.pcm`
+
+### `class PCM(BaseData)`
+
+Single-file Pipeline Current Mapping (PCM) survey reader. Inherits
+`check()` / `clean()` / `save()` from [`BaseData`](#corrosionsdatabase_data).
+
+| Attribute | Value |
+| --- | --- |
+| `KIND` | `"pcm"` |
+| `REQUIRED_COLUMNS` | `Index`, `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Ext GPS Latitude`, `Ext GPS Longitude`, `Survey name (0-100)`, `Gain (dB)` |
+| `NUMERIC_COLUMNS` | `Index`, `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Gain (dB)` |
+| `CLEAN_REQUIRED_COLUMNS` | `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Gain (dB)` (Ext GPS columns are excluded because they are frequently blank) |
+| `UNIQUE_COLUMNS` | `("Int GPS Latitude", "Int GPS Longitude")` |
+
 ```python
 from corrosions.data.pcm import PCM
 
-pcm = PCM("data/2024/PCM FINAL/segment-01.xlsx", year=2024)
-report = pcm.clean().check()
+pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024).check().clean().save()
+pcm.report["is_valid"]   # quality of the raw data
+pcm.cleaned_path         # "output/cleaned/2024/PCM/segment-01.xlsx"
+```
+
+---
+
+## `corrosions.data.cips`
+
+### `class CIPS(BaseData)`
+
+Single-file Close Interval Potential Survey (CIPS) reader. Inherits `save()`
+from [`BaseData`](#corrosionsdatabase_data). It overrides `find_sheet()` to
+locate the data sheet, and `check()` and `clean()` to apply CIPS rules. It
+adds `fix()` to align column names across export formats.
+
+```python
+from corrosions.data.cips import CIPS
+
+cips = CIPS("data/2022/CIPS/segment-01.xlsx", year=2022).fix().check().clean().save()
+cips.report["is_valid"]   # columns OK after fix()
+cips.protection           # "ICCP" or "SACP"
+```
+
+| Attribute | Value |
+| --- | --- |
+| `KIND` | `"cips"` |
+| `REQUIRED_COLUMNS` | `Data No`, `Latitude`, `Longitude`, `Altitude`, `Comment`, `DCP/Feature/DCVG Anomaly` |
+| `NUMERIC_COLUMNS` | `Data No`, `Latitude`, `Longitude` |
+| `CLEAN_REQUIRED_COLUMNS` | `Latitude`, `Longitude`, `Voltage` |
+| `UNIQUE_COLUMNS` | `("Latitude", "Longitude")` |
+| `ICCP_COLUMNS` / `SACP_COLUMNS` | `On Voltage`, `Off Voltage` / `Voltage` |
+| `SHEET_COLUMNS` | `Latitude`, `Longitude`, `DCP/Feature/DCVG Anomaly`: header that marks a sheet as CIPS data (a subset of `REQUIRED_COLUMNS`) |
+| `SHEET_POSSIBILITIES` | `Data`, `Sheet1`, `Sequential File`, `Sequential Files`: preferred names when several sheets qualify |
+| `RENAME_COLUMNS` | `Index` → `Data No`, `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage`, `Altitude (m)` → `Altitude` |
+| `SKIP_FIX_YEARS` | `(2021,)`: years `fix()` leaves as they are |
+
+Extra instance attributes: `protection` (`"ICCP"` or `"SACP"`, set by
+`clean()`) and `fixed` (`True` once `fix()` ran).
+
+#### `data_sheets(sheet_columns: dict[str, list[str]]) -> list[str]` *(classmethod)*
+
+Given each sheet's header row (from `get_sheet_columns`), return the sheets
+whose header contains every `SHEET_COLUMNS` entry, best match first. Names in
+`SHEET_POSSIBILITIES` come first (in that order), then the rest in workbook
+order. This excludes chart, `DCP Data` (which uses `DCP/Feature/Anomaly`),
+`Survey Info` and empty sheets, and ranks `Data` ahead of copies like
+`Raw Data`.
+
+#### `find_sheet(filepath: str) -> str` *(classmethod)*
+
+Read only the header row of each sheet and return `data_sheets(...)[0]`.
+Raises `ValueError` (listing the sheet names) when no sheet qualifies. Called
+by `__init__`, so a CIPS file without a data sheet fails at construction.
+
+#### `fix() -> Self`
+
+Align column names across export formats:
+
+- Rename per `RENAME_COLUMNS`, unless the target column already exists.
+  Other voltage columns (`-mV On`, `Potential (-mV)`, `On Potential (mV)`, …)
+  are left untouched.
+- Add `Data No` as the first column, numbered `0..n-1`, when there is
+  neither `Data No` nor `Index`.
+- Add an empty `Comment` column when there is none.
+- Re-coerce `NUMERIC_COLUMNS`, because `Data No` may only exist after the
+  rename.
+
+Files from `SKIP_FIX_YEARS` (2021) are left as they are. Never raises, and
+running it twice is a no-op.
+
+#### `check() -> Self`
+
+`BaseData.check()` plus:
+
+- `has_altitude`: `Altitude` present. It is also required, so a missing one
+  makes the file invalid.
+- `has_voltage`: at least one of `ICCP_COLUMNS` / `SACP_COLUMNS` present.
+  The file is invalid without one.
+
+`is_valid` is `n_missing == 0 and has_voltage`. Duplicates are still counted
+in `n_duplicates` but do not affect `is_valid`, because `clean()` removes them.
+Call `fix()` first to check the data as `clean()` will see it.
+
+#### `clean() -> Self`
+
+1. Runs `fix()` if it has not run yet.
+2. Normalizes voltages into a single `Voltage` column:
+   - `On Voltage` + `Off Voltage` → **ICCP**.
+   - `Voltage` + `Off Voltage` without `On Voltage` (2022 exports after
+     `fix()`, 2024 exports) → ICCP and SACP surveys share this layout, so the
+     filename decides (`ICCP` / `SACP` as a whole word). ICCP takes `Voltage`
+     as the ON reading.
+   - `Voltage` only → **SACP**.
+
+   ICCP copies `On Voltage` into `Voltage`, negated when the first reading
+   is positive. SACP keeps `Voltage` and sets `On Voltage` / `Off Voltage` to
+   NaN. Both add a `protection` column and set `self.protection`.
+3. `BaseData.clean()` drops:
+   - all-empty rows;
+   - rows whose `Latitude` or `Longitude` is `0` or empty;
+   - rows with an empty `Voltage`;
+   - duplicate `(Latitude, Longitude)` rows, keeping the first reading.
+
+- **Raises** `ValueError` if no voltage layout matches, if the filename is
+  needed but names neither (or both) `ICCP` / `SACP`, or if no row is left.
+
+---
+
+## `corrosions.utils.dataframe_utils`
+
+### `get_sheets(filepath: str) -> list[int | str]`
+
+Return the sheet names of an Excel file. Raises `FileNotFoundError` if the
+file is missing and `ValueError` if it has no sheets.
+
+### `get_sheet_columns(filepath: str) -> dict[str, list[str]]`
+
+Return each sheet's header row (column names as stripped `str`), in workbook
+order. Only the first row of every sheet is parsed. Empty sheets map to `[]`.
+
+```python
+from corrosions.utils.dataframe_utils import get_sheet_columns
+
+get_sheet_columns("survey.xlsx")
+# {'Data': ['Data No', 'Latitude', ...], 'Grafik': []}
 ```
 
 ---

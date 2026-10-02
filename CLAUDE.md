@@ -26,7 +26,7 @@ uv run pytest tests/test_foo.py::test_bar  # single test
 uv run jupyter notebook        # open notebooks used for ad-hoc workflows
 ```
 
-The `main.py` at the repo root is a stub CLI scaffold (argparse only, `main()` returns `None`). Real workflows currently live in Jupyter notebooks at the repo root (`file-index.ipynb`, `check.ipynb`, `check-existsing-files.ipynb`) that drive the `corrosions` package.
+`main.py` at the repo root is the file-check CLI, mirroring `file-index.ipynb`: `FileIndex(...).fix().check_existing_file(source)`, `rebuild()` into `<output>/raw_data`, then `check_cips_file` / `check_pcm_quality` written to `<output>/checked-cips.xlsx` / `checked-pcm.xlsx` (list cells flattened to `a, b` text). Run `uv run main.py [--type cips|pcm] [--output-dir DIR]`; see `--help`. Other ad-hoc workflows live in Jupyter notebooks at the repo root (`file-index.ipynb`, `check.ipynb`, `check-existsing-files.ipynb`) that drive the `corrosions` package.
 
 ## Architecture
 
@@ -36,20 +36,26 @@ The package lives under `src/corrosions/` (src layout — always import from the
 
 The package organizes and validates two types of corrosion survey files collected on underground gas pipelines: **CIPS** (Close Interval Potential Survey) and **PCM** (Pipeline Current Mapping). Files arrive as year-partitioned Excel workbooks and are indexed by a single master Excel spreadsheet (e.g. `IDDA - File List.xlsx` at the repo root).
 
-### Two-layer design
+### Design
 
 1. **`FileIndex`** (`src/corrosions/data/file_index.py`) is the top-level orchestrator. It loads the master Excel index, validates its schema (`FileIndex.COLUMNS`), normalizes filenames (`fix()`), verifies each referenced file exists at `<data_dir>/<Year>/<CIPS|PCM> FINAL/<filename>` (`check_existing_file()`), and copies referenced files into a clean output tree (`rebuild()`). Most mutating methods return `Self` to support chaining and set boolean flags (`checked`, `fixed`) to make idempotency explicit.
 
-2. **`PCM`** (`src/corrosions/data/pcm.py`) is the per-file worker. It loads one PCM Excel export, coerces `NUMERIC_COLUMNS` with `pd.to_numeric(..., errors="coerce")` at construction, drops rows with any NaN in numeric columns (`clean()`), and reports data quality via `check()` (missing required columns + duplicate rows on `UNIQUE_COLUMNS = ("Int GPS Latitude", "Int GPS Longitude")`).
+2. **`BaseData`** (`src/corrosions/data/base_data.py`) is the per-file worker base. Construction loads the sheet returned by the `find_sheet(filepath)` classmethod (default: first sheet; stored as `sheet_name`) and coerces `NUMERIC_COLUMNS` with `pd.to_numeric(..., errors="coerce")`. It exposes a fluent pipeline where every step returns `Self`: `check()` stores a quality summary on `self.report` (missing `REQUIRED_COLUMNS` + duplicate rows on `UNIQUE_COLUMNS`) for whatever `df` holds at call time; `clean()` drops all-empty rows, rows with a `0` coordinate (`UNIQUE_COLUMNS` is the lat/lon pair in both subclasses), rows with NaN in `CLEAN_REQUIRED_COLUMNS`, then duplicate lat/lon rows (first kept). It raises `ValueError` if nothing is left and never saves; `save()` writes to `cleaned_dir`. Subclasses only declare `KIND` and the column constants:
+   - **`PCM`** (`pcm.py`) — `UNIQUE_COLUMNS = ("Int GPS Latitude", "Int GPS Longitude")`; Ext GPS columns are excluded from `CLEAN_REQUIRED_COLUMNS` because they are often blank.
+   - **`CIPS`** (`cips.py`) — workbooks are not uniform (data sheet may be `Data`, `Sheet1`, named after the segment, …, next to `Grafik`/`DCP Data`/`Survey Info`/`Raw Data`). `find_sheet` reads only header rows (`utils.dataframe_utils.get_sheet_columns`) and picks via `data_sheets()`: sheets whose header has all `SHEET_COLUMNS` (`Latitude`, `Longitude`, `DCP/Feature/DCVG Anomaly`; not `Data No`, since 2022 exports use `Index`), ranked by `SHEET_POSSIBILITIES` (`Data` first). `fix()` aligns column names (`RENAME_COLUMNS`: `Index`→`Data No`, `Voltage (V)`→`Voltage`, `Off Voltage (V)`→`Off Voltage`, `Altitude (m)`→`Altitude`) adds `Data No` (`0..n-1`) when neither `Data No` nor `Index` exists, and adds an empty `Comment`. It skips `SKIP_FIX_YEARS` (2021) and never raises. `check()` adds `has_altitude` / `has_voltage`; duplicates are counted but do not make a file invalid. `clean()` runs `fix()`, normalizes voltages into `Voltage` (ICCP if `On`+`Off Voltage`; `Voltage`+`Off Voltage` is decided by `ICCP`/`SACP` in the filename; `Voltage` only is SACP), then applies `BaseData.clean()` (zero/empty lat/lon, dedupe). Chain: `CIPS(...).fix().check().clean().save()`.
 
-3. **`FileIndex.check_pcm_quality(data_dir, n_jobs=...)`** is the fan-out point that runs `PCM.check` across every referenced PCM file in parallel via `joblib.Parallel(backend="loky")`. Loader errors are captured per row (`reason` column) rather than raised, so a single bad file does not abort a batch.
+   Usage: `PCM(path, year=2024).check().clean().save()`.
+
+3. **`FileIndex.check_cips_file(data_dir, n_jobs=...)`** is the CIPS counterpart: it runs `CIPS(...).fix().check()` per file in parallel and adds `candidate_sheets`. The per-row `duplicates` list is left out of the report because it can exceed Excel's cell limit. Nothing is cleaned or saved.
+
+4. **`FileIndex.check_pcm_quality(data_dir, n_jobs=...)`** is the fan-out point that runs `PCM(...).clean().save().check()` across every referenced PCM file in parallel via `joblib.Parallel(backend="loky")` and collects each `report`. Loader errors are captured per row (`reason` column) rather than raised, so a single bad file does not abort a batch.
 
 ### Output tree convention
 
 All artifacts land under `<cwd>/output` by default, resolved through `corrosions.utils.path_utils.resolve_output_dir` (a single chokepoint — always call this instead of hard-coding paths). Sub-layouts:
 
 - `output/<destination_dir>/<Year>/<CIPS|PCM>/<filename>` — rebuilt file tree from `FileIndex.rebuild()`.
-- `output/cleaned/<year>/PCM/<filename>` — cleaned PCM Excel files from `PCM.clean()/save()`. `PCM.check()` will reuse a pre-existing cleaned file at that path instead of re-cleaning.
+- `output/cleaned/<year>/<PCM|CIPS>/<filename>` — cleaned Excel files from `.clean().save()`.
 - `output/file_index_<slug>.csv` — CSV snapshot of the working DataFrame written by `FileIndex.save()`.
 
 ### Logging: gated on `ENABLE_LOG`
@@ -62,7 +68,7 @@ All artifacts land under `<cwd>/output` by default, resolved through `corrosions
 
 - **`ruff.toml`** excludes `tests/`, notebooks, `output*`, and `logs` from linting. `__init__.py` is exempt from `F401`. Docstring convention is Google; import sorting groups `corrosions` as first-party.
 - **`ty.toml`** points at `./src` as the type-check root and excludes `tests/`. `no-matching-overload` is disabled.
-- **`tests/`** currently contains Jupyter notebooks rather than pytest files — treat with care when adding real tests.
+- **`tests/`** holds pytest files (e.g. `tests/test_base_data.py`, which builds synthetic Excel files under `tmp_path`).
 
 ## Wiki
 

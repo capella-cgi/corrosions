@@ -21,7 +21,9 @@ from slugify import slugify
 
 from corrosions.logging import logger
 from corrosions.data.pcm import PCM
+from corrosions.data.cips import CIPS
 from corrosions.utils.path_utils import resolve_output_dir
+from corrosions.utils.dataframe_utils import get_sheet_columns
 
 
 class FileIndex:
@@ -245,7 +247,7 @@ class FileIndex:
         self,
         source_dir: str,
         output_dir: str | None = None,
-        destination_dir: str = "data",
+        destination_dir: str = "raw_data",
     ) -> Self:
         """Copy referenced files from ``source_dir`` into a clean output tree.
 
@@ -258,13 +260,13 @@ class FileIndex:
             source_dir (str): Root directory of the source data tree.
             output_dir (str | None): Destination root. Defaults to ``<cwd>/output``.
             destination_dir (str): Subdirectory under ``output_dir`` to copy into.
-                Defaults to ``"data"``.
+                Defaults to ``"raw_data"``.
 
         Returns:
             Self: The same ``FileIndex`` instance, to allow chaining.
 
         Example:
-            >>> index.rebuild(source_dir="//nas/surveys", destination_dir="data")
+            >>> index.rebuild(source_dir="//nas/surveys", destination_dir="raw_data")
         """
         self.check_existing_file(source_dir)
 
@@ -293,9 +295,7 @@ class FileIndex:
                     filename,
                 )
 
-                destination_dir_year = os.path.join(
-                    destination_dir, year, data_type
-                )
+                destination_dir_year = os.path.join(destination_dir, year, data_type)
                 os.makedirs(destination_dir_year, exist_ok=True)
 
                 destination_filepath = os.path.join(destination_dir_year, filename)
@@ -311,12 +311,16 @@ class FileIndex:
             f"Copied {copied} files to {destination_dir} (skipped {skipped} existing)"
         )
 
-        self.save()
+        self.save(output_dir)
 
         return self
 
     def check_pcm_quality(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Run PCM data-quality checks on every referenced PCM file.
+
+        Each file runs through ``PCM(...).clean().save().check()``, so the
+        cleaned copy is written under ``output/cleaned/<year>/PCM/`` and the
+        report describes the cleaned data.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned data files.
@@ -352,8 +356,8 @@ class FileIndex:
                 }
 
             try:
-                pcm = PCM(filepath, year=year)
-                return {"year": year, **pcm.check(), "reason": None}
+                pcm = PCM(filepath, year=year).clean().save().check()
+                return {"year": year, **pcm.report, "reason": None}
             except Exception as e:
                 return {
                     "year": year,
@@ -378,6 +382,86 @@ class FileIndex:
             "duplicates",
             "reason",
         ]
+        return pd.DataFrame(results, columns=columns)
+
+    def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
+        """Run CIPS data-quality checks on every referenced CIPS file.
+
+        Each file runs through ``CIPS(...).fix().check()``: the data sheet is
+        located (CIPS workbooks are not uniform, see ``CIPS.find_sheet``),
+        column names are aligned (``CIPS.fix``), then checked
+        (``CIPS.check``). Nothing is cleaned or saved.
+
+        Args:
+            data_dir (str): Root directory containing the year-partitioned
+                data files, laid out as ``<data_dir>/<Year>/CIPS/<filename>``.
+            n_jobs (int): Number of parallel workers to use via joblib's
+                ``loky`` backend. ``1`` runs sequentially, ``-1`` uses all
+                available cores. Defaults to ``1``.
+
+        Returns:
+            pd.DataFrame: One row per index entry with a CIPS filename, with
+                columns ``year``, ``filepath``, ``is_valid``, ``sheet_name``
+                (sheet loaded), ``candidate_sheets`` (every qualifying sheet,
+                best first), ``has_altitude``, ``has_voltage``, ``n_missing``,
+                ``missing_columns``, ``n_duplicates`` and ``reason``. The
+                per-row duplicate list is left out: CIPS files can repeat
+                thousands of GPS points, too many for an Excel cell, and
+                duplicates do not affect ``is_valid`` (``clean`` removes them).
+                Rows with a missing file, no data sheet, or a load error are
+                recorded as ``is_valid=False`` with a ``reason``.
+
+        Example:
+            >>> report = index.check_cips_file("output/raw_data", n_jobs=-1)
+            >>> report[~report["is_valid"]]
+        """
+        columns = [
+            "year",
+            "filepath",
+            "is_valid",
+            "sheet_name",
+            "candidate_sheets",
+            "has_altitude",
+            "has_voltage",
+            "n_missing",
+            "missing_columns",
+            "n_duplicates",
+            "reason",
+        ]
+
+        def _check_row(row: pd.Series) -> dict:
+            year = int(row["Year"])
+            filepath = os.path.join(data_dir, str(year), "CIPS", row["CIPS"])
+            if not os.path.isfile(filepath):
+                return {
+                    "year": year,
+                    "filepath": filepath,
+                    "is_valid": False,
+                    "reason": "file not found on disk",
+                }
+
+            try:
+                candidates = CIPS.data_sheets(get_sheet_columns(filepath))
+                cips = CIPS(filepath, year=year).fix().check()
+                return {
+                    "year": year,
+                    **cips.report,
+                    "candidate_sheets": candidates,
+                    "reason": None,
+                }
+            except Exception as e:
+                return {
+                    "year": year,
+                    "filepath": filepath,
+                    "is_valid": False,
+                    "reason": f"{type(e).__name__}: {e}",
+                }
+
+        rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
+        results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_check_row)(row) for row in rows
+        )
+
         return pd.DataFrame(results, columns=columns)
 
     def save(self, output_dir: str | None = None) -> None:
