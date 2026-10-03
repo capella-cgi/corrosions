@@ -14,11 +14,13 @@ Loads `IDDA - File List.xlsx`, copies the referenced files from the source
 tree (default `D:\Data\Data IDDA`) into `output/raw_data`, then writes one
 report per data type:
 
-- `checked-cips.xlsx`: per file, after the CIPS column fixes (`Index` →
-  `Data No`, `Voltage (V)` → `Voltage`, …): the data sheet loaded
-  (`sheet_name`), every qualifying sheet (`candidate_sheets`),
-  `has_altitude`, `has_voltage`, missing required columns, and the number
-  of duplicate GPS rows.
+- `checked-cips.xlsx`: per file, after the CIPS column fixes
+  (`Voltage (V)` → `Voltage`, …): the data sheet loaded (`sheet_name`),
+  every qualifying sheet (`candidate_sheets`), `has_voltage`, missing
+  required columns, and the number of duplicate GPS rows. Each file is
+  then cleaned (cleaned copies go to `output/cleaned/<year>/CIPS/`,
+  path in `cleaned_path`). A file that cannot be cleaned is marked invalid
+  with a `clean failed: …` reason.
 - `checked-pcm.xlsx`: missing columns and duplicate GPS rows per file, after
   cleaning (cleaned copies go to `output/cleaned/<year>/PCM/`).
 

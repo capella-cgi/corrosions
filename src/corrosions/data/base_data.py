@@ -75,6 +75,14 @@ class BaseData:
             self.output_dir, "cleaned", str(year), self.KIND.upper()
         )
         self.cleaned_path: str | None = None
+        self.normalize_dir = os.path.join(
+            self.output_dir,
+            "normalize",
+            self.KIND.lower(),
+        )
+        self.normalize_excel_dir = os.path.join(self.normalize_dir, "excel")
+        self.normalize_json_dir = os.path.join(self.normalize_dir, "json")
+        self.normalize_path: str | None = None
         self.report: dict = {}
         self.verbose = verbose
         self.sheet_name = self.find_sheet(filepath)

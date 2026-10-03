@@ -301,6 +301,7 @@ class FileIndex:
                 destination_filepath = os.path.join(destination_dir_year, filename)
 
                 if os.path.isfile(destination_filepath):
+                    logger.warning(f"Exists. Skipped: {source_filepath}")
                     skipped += 1
                     continue
 
@@ -385,12 +386,14 @@ class FileIndex:
         return pd.DataFrame(results, columns=columns)
 
     def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
-        """Run CIPS data-quality checks on every referenced CIPS file.
+        """Check, clean and save every referenced CIPS file.
 
         Each file runs through ``CIPS(...).fix().check()``: the data sheet is
         located (CIPS workbooks are not uniform, see ``CIPS.find_sheet``),
         column names are aligned (``CIPS.fix``), then checked
-        (``CIPS.check``). Nothing is cleaned or saved.
+        (``CIPS.check``). Then ``clean().save()`` writes a cleaned copy to
+        ``<cwd>/output/cleaned/<year>/CIPS/``. The two steps are separate,
+        so a file that fails to clean still reports its column checks.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned
@@ -403,13 +406,16 @@ class FileIndex:
             pd.DataFrame: One row per index entry with a CIPS filename, with
                 columns ``year``, ``filepath``, ``is_valid``, ``sheet_name``
                 (sheet loaded), ``candidate_sheets`` (every qualifying sheet,
-                best first), ``has_altitude``, ``has_voltage``, ``n_missing``,
-                ``missing_columns``, ``n_duplicates`` and ``reason``. The
-                per-row duplicate list is left out: CIPS files can repeat
+                best first), ``has_voltage``, ``n_missing``,
+                ``missing_columns``, ``n_duplicates``, ``cleaned_path`` and
+                ``reason``. Check columns describe the file before cleaning.
+                The per-row duplicate list is left out: CIPS files can repeat
                 thousands of GPS points, too many for an Excel cell, and
                 duplicates do not affect ``is_valid`` (``clean`` removes them).
-                Rows with a missing file, no data sheet, or a load error are
-                recorded as ``is_valid=False`` with a ``reason``.
+                ``is_valid`` is False when a check fails or cleaning fails.
+                Rows with a missing file, no data sheet, a load error or a
+                clean error get a ``reason``. ``cleaned_path`` is set only
+                when the cleaned copy was saved.
 
         Example:
             >>> report = index.check_cips_file("output/raw_data", n_jobs=-1)
@@ -421,11 +427,11 @@ class FileIndex:
             "is_valid",
             "sheet_name",
             "candidate_sheets",
-            "has_altitude",
             "has_voltage",
             "n_missing",
             "missing_columns",
             "n_duplicates",
+            "cleaned_path",
             "reason",
         ]
 
@@ -443,12 +449,6 @@ class FileIndex:
             try:
                 candidates = CIPS.data_sheets(get_sheet_columns(filepath))
                 cips = CIPS(filepath, year=year).fix().check()
-                return {
-                    "year": year,
-                    **cips.report,
-                    "candidate_sheets": candidates,
-                    "reason": None,
-                }
             except Exception as e:
                 return {
                     "year": year,
@@ -456,6 +456,24 @@ class FileIndex:
                     "is_valid": False,
                     "reason": f"{type(e).__name__}: {e}",
                 }
+
+            result = {
+                "year": year,
+                **cips.report,
+                "candidate_sheets": candidates,
+                "cleaned_path": None,
+                "reason": None,
+            }
+
+            try:
+                cips.clean().save()
+            except Exception as e:
+                result["is_valid"] = False
+                result["reason"] = f"clean failed: {type(e).__name__}: {e}"
+                return result
+
+            result["cleaned_path"] = cips.cleaned_path
+            return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
         results = Parallel(n_jobs=n_jobs, backend="loky")(

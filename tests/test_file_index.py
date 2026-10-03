@@ -44,7 +44,9 @@ def _write_index(path, rows: list[tuple[int, str | None]]) -> None:
     ).to_excel(path, index=False)
 
 
-def test_check_cips_file(tmp_path):
+def test_check_cips_file(tmp_path, monkeypatch):
+    # check_cips_file saves cleaned copies under <cwd>/output; keep them in tmp
+    monkeypatch.chdir(tmp_path)
     data_dir = tmp_path / "data"
     for year in (2021, 2022, 2024):
         os.makedirs(data_dir / str(year) / "CIPS")
@@ -54,13 +56,17 @@ def test_check_cips_file(tmp_path):
         data_dir / "2024" / "CIPS" / "good.xlsx",
         {"Grafik": {}, "Segment A": _cips_data()},
     )
-    # 2022 export: "Index" / "Voltage (V)" / "Off Voltage (V)" are fixed -> valid
+    # 2022 export: "Voltage (V)" / "Off Voltage (V)" are fixed; the filename
+    # tells ICCP from SACP -> valid
     legacy = _cips_data()
     legacy["Index"] = legacy.pop("Data No")
     legacy["Voltage (V)"] = legacy.pop("On Voltage")
     legacy["Off Voltage (V)"] = legacy.pop("Off Voltage")
-    _write_sheets(data_dir / "2022" / "CIPS" / "legacy.xlsx", {"Data": legacy})
-    # no Altitude -> invalid, flagged
+    _write_sheets(data_dir / "2022" / "CIPS" / "CIPS - ICCP legacy.xlsx", {"Data": legacy})
+    # same columns, but the filename names neither ICCP nor SACP -> checks
+    # pass, clean() fails
+    _write_sheets(data_dir / "2022" / "CIPS" / "unknown.xlsx", {"Data": legacy})
+    # Altitude is not required -> valid
     no_alt = _cips_data()
     del no_alt["Altitude"]
     _write_sheets(data_dir / "2024" / "CIPS" / "noalt.xlsx", {"Data": no_alt})
@@ -79,7 +85,8 @@ def test_check_cips_file(tmp_path):
         index_path,
         [
             (2024, "good.xlsx"),
-            (2022, "legacy.xlsx"),
+            (2022, "CIPS - ICCP legacy.xlsx"),
+            (2022, "unknown.xlsx"),
             (2024, "noalt.xlsx"),
             (2021, "mv.xlsx"),
             (2024, "nodata.xlsx"),
@@ -91,22 +98,34 @@ def test_check_cips_file(tmp_path):
     report = FileIndex(str(index_path)).check_cips_file(str(data_dir))
     report.index = [os.path.basename(p) for p in report["filepath"]]
 
-    assert len(report) == 6  # row with no CIPS filename is skipped
+    assert len(report) == 7  # row with no CIPS filename is skipped
 
     assert report.loc["good.xlsx", "is_valid"]
     assert report.loc["good.xlsx", "sheet_name"] == "Segment A"
     assert report.loc["good.xlsx", "candidate_sheets"] == ["Segment A"]
+    assert report.loc["good.xlsx", "cleaned_path"] == os.path.join(
+        str(tmp_path), "output", "cleaned", "2024", "CIPS", "good.xlsx"
+    )
+    assert os.path.isfile(report.loc["good.xlsx", "cleaned_path"])
 
-    assert report.loc["legacy.xlsx", "is_valid"]
-    assert report.loc["legacy.xlsx", "n_missing"] == 0
+    assert report.loc["CIPS - ICCP legacy.xlsx", "is_valid"]
+    assert report.loc["CIPS - ICCP legacy.xlsx", "n_missing"] == 0
 
-    assert not report.loc["noalt.xlsx", "is_valid"]
-    assert not report.loc["noalt.xlsx", "has_altitude"]
-    assert report.loc["noalt.xlsx", "missing_columns"] == ["Altitude"]
+    # check columns are kept when only clean() fails
+    assert not report.loc["unknown.xlsx", "is_valid"]
+    assert report.loc["unknown.xlsx", "has_voltage"]
+    assert report.loc["unknown.xlsx", "n_missing"] == 0
+    assert pd.isna(report.loc["unknown.xlsx", "cleaned_path"])
+    assert "Cannot tell ICCP from SACP" in report.loc["unknown.xlsx", "reason"]
+
+    assert report.loc["noalt.xlsx", "is_valid"]
+    assert report.loc["noalt.xlsx", "n_missing"] == 0
+    assert "has_altitude" not in report.columns
 
     assert not report.loc["mv.xlsx", "is_valid"]
     assert not report.loc["mv.xlsx", "has_voltage"]
     assert report.loc["mv.xlsx", "n_missing"] == 0
+    assert report.loc["mv.xlsx", "reason"].startswith("clean failed")
 
     assert not report.loc["nodata.xlsx", "is_valid"]
     assert "No CIPS data sheet" in report.loc["nodata.xlsx", "reason"]

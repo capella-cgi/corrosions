@@ -6,7 +6,7 @@ data type to ``<output_dir>/checked-cips.xlsx`` / ``checked-pcm.xlsx``.
 
 Example:
     uv run main.py                     # check both CIPS and PCM
-    uv run main.py --type cips         # CIPS sheet/column check only
+    uv run main.py --type cips         # CIPS check + clean only
 """
 
 import os

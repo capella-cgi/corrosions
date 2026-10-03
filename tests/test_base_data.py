@@ -106,6 +106,15 @@ def test_cips_iccp_voltage_negated(tmp_path):
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
     assert cips.protection == "ICCP"
     assert cips.df["Voltage"].tolist() == [-1.1, -1.2, -1.3]
+    assert cips.df["Off Voltage"].tolist() == [-0.9, -1.0, -1.1]
+
+
+def test_cips_sacp_positive_voltage_negated(tmp_path):
+    path = _write_excel(
+        tmp_path / "sacp.xlsx", {**_cips_base(), "Voltage": [0.9, 1.0, 1.1]}
+    )
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.df["Voltage"].tolist() == [-0.9, -1.0, -1.1]
 
 
 def test_cips_sacp(tmp_path):
@@ -198,16 +207,6 @@ def test_cips_no_data_sheet_raises(tmp_path):
         CIPS(path, year=2024, output_dir=str(tmp_path / "out"))
 
 
-def test_cips_fix_renames_altitude_m(tmp_path):
-    data = _iccp()
-    data["Altitude (m)"] = data.pop("Altitude")
-    path = _write_excel(tmp_path / "alt.xlsx", data)
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix().check()
-    assert "Altitude" in cips.df.columns
-    assert "Altitude (m)" not in cips.df.columns
-    assert cips.report["has_altitude"] is True
-
-
 def test_cips_sheet_columns_subset_of_required():
     assert set(CIPS.SHEET_COLUMNS) <= set(CIPS.REQUIRED_COLUMNS)
 
@@ -232,11 +231,10 @@ def test_cips_fix_renames_and_adds_comment(tmp_path):
     cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out"))
     assert cips.fix() is cips
     cols = list(cips.df.columns)
-    assert "Data No" in cols and "Index" not in cols
+    assert "Index" in cols and "Data No" not in cols  # Index is not renamed
     assert "Voltage" in cols and "Off Voltage" in cols
     assert "On Potential (mV)" in cols  # mV columns untouched
     assert (cips.df["Comment"] == "").all()
-    assert pd.api.types.is_numeric_dtype(cips.df["Data No"])
     assert cips.check().report["is_valid"] is True
 
 
@@ -248,15 +246,14 @@ def test_cips_fix_skips_2021(tmp_path):
     assert "Comment" not in cips.df.columns
 
 
-def test_cips_check_flags_voltage_and_altitude(tmp_path):
+def test_cips_check_flags_missing_voltage(tmp_path):
     data = {**_cips_base(), "-mV On": [1, 2, 3]}
-    del data["Altitude"]
     path = _write_excel(tmp_path / "mv.xlsx", data)
     report = CIPS(path, year=2021, output_dir=str(tmp_path / "out")).check().report
     assert report["has_voltage"] is False
-    assert report["has_altitude"] is False
-    assert report["missing_columns"] == ["Altitude"]
+    assert report["n_missing"] == 0
     assert report["is_valid"] is False
+    assert "has_altitude" not in report
 
 
 def test_cips_voltage_off_voltage_iccp_by_filename(tmp_path):
@@ -265,14 +262,14 @@ def test_cips_voltage_off_voltage_iccp_by_filename(tmp_path):
     assert cips.protection == "ICCP"
     assert cips.df["On Voltage"].tolist() == [1.1, 1.2, 1.3]
     assert cips.df["Voltage"].tolist() == [-1.1, -1.2, -1.3]
-    assert cips.df["Off Voltage"].tolist() == [0.9, 1.0, 1.1]
+    assert cips.df["Off Voltage"].tolist() == [-0.9, -1.0, -1.1]
 
 
 def test_cips_voltage_off_voltage_sacp_by_filename(tmp_path):
     path = _write_excel(tmp_path / "CIPS - SACP TNG 8 in A - B.xlsx", _cips_2022())
     cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out")).clean()
     assert cips.protection == "SACP"
-    assert cips.df["Voltage"].tolist() == [1.1, 1.2, 1.3]
+    assert cips.df["Voltage"].tolist() == [-1.1, -1.2, -1.3]
     assert cips.df["Off Voltage"].isna().all()
 
 
@@ -313,20 +310,14 @@ def test_cips_clean_raises_when_only_zero_coordinates(tmp_path):
         CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
 
 
-def test_cips_fix_adds_data_no_when_missing(tmp_path):
+def test_cips_valid_without_data_no_and_altitude(tmp_path):
     data = {**_cips_base(), "Voltage": [-0.9, -1.0, -1.1]}
-    del data["Data No"]
-    path = _write_excel(tmp_path / "CIPS - SACP no data no.xlsx", data)
-    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).fix()
-    assert cips.df.columns[0] == "Data No"
-    assert cips.df["Data No"].tolist() == [0, 1, 2]
-    assert cips.check().report["is_valid"] is True
-
-
-def test_cips_fix_keeps_index_values_as_data_no(tmp_path):
-    path = _write_excel(tmp_path / "CIPS - ICCP 2022.xlsx", _cips_2022(Index=[7, 8, 9]))
-    cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out")).fix()
-    assert cips.df["Data No"].tolist() == [7, 8, 9]
+    del data["Data No"], data["Altitude"]
+    path = _write_excel(tmp_path / "CIPS - SACP minimal.xlsx", data)
+    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).fix().check()
+    assert "Data No" not in cips.df.columns
+    assert "Altitude" not in cips.df.columns
+    assert cips.report["is_valid"] is True
 
 
 def test_pcm_clean_drops_zero_and_duplicate_coordinates(tmp_path):

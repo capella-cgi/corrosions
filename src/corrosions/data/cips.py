@@ -46,16 +46,13 @@ class CIPS(BaseData):
     KIND = "cips"
 
     REQUIRED_COLUMNS: list[str] = [
-        "Data No",
         "Latitude",
         "Longitude",
-        "Altitude",
         "Comment",
         "DCP/Feature/DCVG Anomaly",
     ]
 
     NUMERIC_COLUMNS: list[str] = [
-        "Data No",
         "Latitude",
         "Longitude",
     ]
@@ -77,9 +74,8 @@ class CIPS(BaseData):
         "Voltage",
     ]
 
-    # Present on every CIPS data sheet seen so far (2021-2026 exports). "Data No"
-    # is not: 2022 exports use "Index". "DCP Data" sheets use
-    # "DCP/Feature/Anomaly", so they do not match.
+    # Present on every CIPS data sheet seen so far (2021-2026 exports).
+    # "DCP Data" sheets use "DCP/Feature/Anomaly", so they do not match.
     SHEET_COLUMNS: list[str] = [
         "Latitude",
         "Longitude",
@@ -96,10 +92,8 @@ class CIPS(BaseData):
     # Applied by ``fix``. Other voltage columns (``-mV On``, ``Potential (-mV)``,
     # ``On Potential (mV)``, ...) are left untouched.
     RENAME_COLUMNS: dict[str, str] = {
-        "Index": "Data No",
         "Voltage (V)": "Voltage",
         "Off Voltage (V)": "Off Voltage",
-        "Altitude (m)": "Altitude",
     }
 
     # Years whose exports ``fix`` leaves as they are; ``check`` still reports
@@ -196,15 +190,11 @@ class CIPS(BaseData):
     def fix(self) -> Self:
         """Align column names across CIPS export formats.
 
-        - Renames columns per ``RENAME_COLUMNS`` (``Index`` -> ``Data No``,
-          ``Voltage (V)`` -> ``Voltage``, ``Off Voltage (V)`` -> ``Off Voltage``),
-          unless the target column already exists. ``-mV`` / ``Potential``
-          columns are left untouched.
-        - Adds ``Data No`` as the first column, numbered ``0..n-1``, when
-          there is neither ``Data No`` nor ``Index``.
+        - Renames columns per ``RENAME_COLUMNS`` (``Voltage (V)`` ->
+          ``Voltage``, ``Off Voltage (V)`` -> ``Off Voltage``), unless the
+          target column already exists. ``-mV`` / ``Potential`` columns are
+          left untouched.
         - Adds an empty ``Comment`` column when there is none.
-        - Re-coerces ``NUMERIC_COLUMNS`` (``Data No`` may only exist after the
-          rename).
 
         Files from ``SKIP_FIX_YEARS`` (2021) are left as they are. Never raises;
         use ``check`` to see what is still missing. Running it twice is a no-op.
@@ -214,7 +204,7 @@ class CIPS(BaseData):
 
         Example:
             >>> CIPS("2022/CIPS/segment.xlsx", year=2022).fix().df.columns
-            Index(['Data No', ..., 'Voltage', 'Off Voltage', ...], dtype='object')
+            Index(['Index', ..., 'Voltage', 'Off Voltage', ...], dtype='object')
         """
         if self.fixed:
             return self
@@ -232,24 +222,17 @@ class CIPS(BaseData):
         }
         df = self.df.rename(columns=renames)
 
-        # Neither "Data No" nor "Index" (renamed above): number rows from 0.
-        added_data_no = "Data No" not in df.columns
-        if added_data_no:
-            df.insert(0, "Data No", range(len(df)))
-
         added_comment = "Comment" not in df.columns
         if added_comment:
             df["Comment"] = ""
 
-        if self.verbose and (renames or added_data_no or added_comment):
+        if self.verbose and (renames or added_comment):
             logger.info(
                 f"Fixed {self.filepath}: renamed {renames}, "
-                f"added Data No: {added_data_no}, "
                 f"added empty Comment: {added_comment}"
             )
 
         self.df = df
-        self._coerce_numeric()
 
         return self
 
@@ -259,8 +242,6 @@ class CIPS(BaseData):
         ``SHEET_COLUMNS`` is a subset of ``REQUIRED_COLUMNS``, so the base
         missing-column check covers both. On top of that ``self.report`` gets:
 
-        - ``has_altitude`` (bool): ``Altitude`` column present. ``Altitude`` is
-          also in ``REQUIRED_COLUMNS``, so a missing one makes the file invalid.
         - ``has_voltage`` (bool): at least one of ``ICCP_COLUMNS`` or
           ``SACP_COLUMNS`` is present. ``is_valid`` is False without it.
 
@@ -275,18 +256,16 @@ class CIPS(BaseData):
             Self: ``self``, to allow method chaining.
 
         Example:
-            >>> CIPS("segment.xlsx", year=2024).fix().check().report["has_altitude"]
-            False
+            >>> CIPS("segment.xlsx", year=2024).fix().check().report["has_voltage"]
+            True
         """
         super().check()
 
         columns = self.df.columns
-        has_altitude = "Altitude" in columns
         has_voltage = any(
             c in columns for c in [*self.ICCP_COLUMNS, *self.SACP_COLUMNS]
         )
 
-        self.report["has_altitude"] = has_altitude
         self.report["has_voltage"] = has_voltage
         self.report["is_valid"] = self.report["n_missing"] == 0 and has_voltage
 
@@ -295,7 +274,7 @@ class CIPS(BaseData):
     def clean(self) -> Self:
         """Fix columns, normalize voltages, then drop unusable rows.
 
-        Runs ``fix`` if it has not run yet, then ``_normalize_voltage``, then
+        Runs ``fix`` if it has not run yet, then ``_fix_voltage``, then
         ``BaseData.clean``: drops all-empty rows, rows whose ``Latitude`` or
         ``Longitude`` is ``0`` or empty, rows with an empty ``Voltage``, and
         duplicate (``Latitude``, ``Longitude``) rows (first reading kept).
@@ -308,7 +287,7 @@ class CIPS(BaseData):
                 SACP, or if no row is left.
         """
         self.fix()
-        self._normalize_voltage()
+        self._fix_voltage()
         return super().clean()
 
     def _protection_from_filename(self) -> Literal["ICCP", "SACP"] | None:
@@ -321,7 +300,7 @@ class CIPS(BaseData):
             return "SACP"
         return None
 
-    def _normalize_voltage(self) -> None:
+    def _fix_voltage(self) -> None:
         """Normalize ICCP/SACP voltages into a single ``Voltage`` column.
 
         Protection is decided by the columns present:
@@ -333,10 +312,16 @@ class CIPS(BaseData):
           reading (``On Voltage = Voltage``).
         - ``Voltage`` only: SACP.
 
-        ICCP copies ``On Voltage`` into ``Voltage``, negated when the first
-        reading is positive. SACP keeps ``Voltage`` and sets ``On Voltage`` /
-        ``Off Voltage`` to NaN. Both add a ``protection`` column and set
-        ``self.protection``.
+        Readings are stored as negative potentials. A column whose first
+        reading is positive is negated as a whole.
+
+        - ICCP copies ``On Voltage`` into ``Voltage`` and negates ``Voltage``
+          and ``Off Voltage`` independently (``On Voltage`` keeps the source
+          sign).
+        - SACP negates ``Voltage`` and sets ``On Voltage`` / ``Off Voltage``
+          to NaN.
+
+        Both add a ``protection`` column and set ``self.protection``.
 
         Raises:
             ValueError: If no ICCP/SACP layout matches, or the layout needs the
@@ -352,9 +337,11 @@ class CIPS(BaseData):
             _df["Off Voltage"] = pd.to_numeric(_df["Off Voltage"], errors="coerce")
 
             _df["Voltage"] = _df["On Voltage"]
-
             if _df.iloc[0]["Voltage"] > 0:
                 _df["Voltage"] = _df["Voltage"] * -1
+
+            if _df.iloc[0]["Off Voltage"] > 0:
+                _df["Off Voltage"] = _df["Off Voltage"] * -1
 
             _df["protection"] = "ICCP"
             self.protection = "ICCP"
@@ -366,9 +353,12 @@ class CIPS(BaseData):
             if self.verbose:
                 logger.info(f"Fixing SACP: {self.filepath}")
 
-            _df["Voltage"] = pd.to_numeric(_df["Voltage"], errors="coerce")
             _df["On Voltage"] = np.nan
             _df["Off Voltage"] = np.nan
+
+            _df["Voltage"] = pd.to_numeric(_df["Voltage"], errors="coerce")
+            if _df.iloc[0]["Voltage"] > 0:
+                _df["Voltage"] = _df["Voltage"] * -1
 
             _df["protection"] = "SACP"
             self.protection = "SACP"

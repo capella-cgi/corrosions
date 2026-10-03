@@ -208,20 +208,23 @@ Returns a DataFrame with one row per index entry and columns:
 Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
 file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
 backend like `check_pcm_quality`. The data sheet is located, column names
-are aligned, then checked. Nothing is cleaned or saved.
+are aligned, then checked. Then `clean().save()` writes a cleaned copy to
+`<cwd>/output/cleaned/<year>/CIPS/`. The two steps are separate, so a file
+that fails to clean still reports its column checks. Check columns describe
+the file before cleaning.
 
 | Column | Description |
 | --- | --- |
 | `year` | Survey year for the row. |
 | `filepath` | Full path to the referenced CIPS file. |
-| `is_valid` | `True` when no required column is missing and a voltage column exists. Duplicates do not count. |
+| `is_valid` | `True` when no required column is missing, a voltage column exists, and `clean()` succeeded. Duplicates do not count. |
 | `sheet_name` | Sheet that was loaded. |
 | `candidate_sheets` | Every qualifying sheet, best match first. |
-| `has_altitude` | `Altitude` column present (also required). |
 | `has_voltage` | At least one of `On Voltage`, `Off Voltage`, `Voltage` present. |
 | `n_missing` / `missing_columns` | Required columns missing after `fix()`. |
 | `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
-| `reason` | Populated when the file is missing, has no data sheet, or fails to load. |
+| `cleaned_path` | Path of the saved cleaned copy; empty when cleaning failed. |
+| `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning fails (prefixed `clean failed:`). |
 
 #### `save(output_dir: str | None = None) -> None`
 
@@ -385,14 +388,14 @@ cips.protection           # "ICCP" or "SACP"
 | Attribute | Value |
 | --- | --- |
 | `KIND` | `"cips"` |
-| `REQUIRED_COLUMNS` | `Data No`, `Latitude`, `Longitude`, `Altitude`, `Comment`, `DCP/Feature/DCVG Anomaly` |
-| `NUMERIC_COLUMNS` | `Data No`, `Latitude`, `Longitude` |
+| `REQUIRED_COLUMNS` | `Latitude`, `Longitude`, `Comment`, `DCP/Feature/DCVG Anomaly` |
+| `NUMERIC_COLUMNS` | `Latitude`, `Longitude` |
 | `CLEAN_REQUIRED_COLUMNS` | `Latitude`, `Longitude`, `Voltage` |
 | `UNIQUE_COLUMNS` | `("Latitude", "Longitude")` |
 | `ICCP_COLUMNS` / `SACP_COLUMNS` | `On Voltage`, `Off Voltage` / `Voltage` |
 | `SHEET_COLUMNS` | `Latitude`, `Longitude`, `DCP/Feature/DCVG Anomaly`: header that marks a sheet as CIPS data (a subset of `REQUIRED_COLUMNS`) |
 | `SHEET_POSSIBILITIES` | `Data`, `Sheet1`, `Sequential File`, `Sequential Files`: preferred names when several sheets qualify |
-| `RENAME_COLUMNS` | `Index` → `Data No`, `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage`, `Altitude (m)` → `Altitude` |
+| `RENAME_COLUMNS` | `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage` |
 | `SKIP_FIX_YEARS` | `(2021,)`: years `fix()` leaves as they are |
 
 Extra instance attributes: `protection` (`"ICCP"` or `"SACP"`, set by
@@ -420,11 +423,7 @@ Align column names across export formats:
 - Rename per `RENAME_COLUMNS`, unless the target column already exists.
   Other voltage columns (`-mV On`, `Potential (-mV)`, `On Potential (mV)`, …)
   are left untouched.
-- Add `Data No` as the first column, numbered `0..n-1`, when there is
-  neither `Data No` nor `Index`.
 - Add an empty `Comment` column when there is none.
-- Re-coerce `NUMERIC_COLUMNS`, because `Data No` may only exist after the
-  rename.
 
 Files from `SKIP_FIX_YEARS` (2021) are left as they are. Never raises, and
 running it twice is a no-op.
@@ -433,8 +432,6 @@ running it twice is a no-op.
 
 `BaseData.check()` plus:
 
-- `has_altitude`: `Altitude` present. It is also required, so a missing one
-  makes the file invalid.
 - `has_voltage`: at least one of `ICCP_COLUMNS` / `SACP_COLUMNS` present.
   The file is invalid without one.
 
