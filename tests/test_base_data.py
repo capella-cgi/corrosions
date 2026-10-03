@@ -337,3 +337,149 @@ def test_pcm_clean_drops_zero_and_duplicate_coordinates(tmp_path):
     # row 1 duplicate of row 0; rows 2 and 3 have a zero coordinate
     assert pcm.df["Index"].tolist() == [1, 5]
     assert pcm.check().report["n_duplicates"] == 0
+
+
+def _cips_track(latitudes: list[float]) -> dict:
+    n = len(latitudes)
+    return {
+        "Latitude": latitudes,
+        "Longitude": [106.1] * n,
+        "Comment": [""] * n,
+        "DCP/Feature/DCVG Anomaly": [""] * n,
+        "Voltage": [-0.9] * n,
+    }
+
+
+def test_cips_normalize_distances(tmp_path):
+    # 0.001 degree of latitude apart -> ~111.195 m per step
+    path = _write_excel(
+        tmp_path / "CIPS - SACP track.xlsx", _cips_track([-6.1, -6.101, -6.102])
+    )
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.normalize() is cips
+    assert cips.df["distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
+    assert cips.df["real_distance"].tolist() == pytest.approx(
+        [0.0, 111.195, 222.390], abs=1e-3
+    )
+
+
+def test_cips_normalize_after_clean_leaves_index_gaps(tmp_path):
+    # row 0: lat 0 (dropped), row 2: duplicate of row 1 (dropped)
+    path = _write_excel(
+        tmp_path / "CIPS - SACP gaps.xlsx",
+        _cips_track([0.0, -6.1, -6.1, -6.101, -6.102]),
+    )
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert list(cips.df.index) == [1, 3, 4]
+
+    cips.normalize()
+    assert list(cips.df.index) == [1, 3, 4]
+    assert cips.df["distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
+    assert cips.df["real_distance"].iloc[-1] == pytest.approx(222.390, abs=1e-3)
+
+
+def test_cips_normalize_renames_columns(tmp_path):
+    data = {**_cips_track([-6.1, -6.101])}
+    del data["Voltage"]
+    data["On Voltage"] = [-1.0, -1.0]
+    data["Off Voltage"] = [-0.9, -0.9]
+    path = _write_excel(tmp_path / "CIPS - ICCP cols.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
+    assert set(cips.df.columns) == {
+        "latitude",
+        "longitude",
+        "voltage",
+        "on_voltage",
+        "off_voltage",
+        "protection",
+        "comment",
+        "dcp_feature_dcvg_anomaly",
+        "distance",
+        "real_distance",
+        "condition",
+    }
+
+
+def test_cips_normalize_condition_sacp_uses_voltage(tmp_path):
+    data = _cips_track([-6.1, -6.101, -6.102, -6.103, -6.104])
+    data["Voltage"] = [-0.80, -0.85, -1.0, -1.2, -1.5]
+    path = _write_excel(tmp_path / "CIPS - SACP cond.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
+    assert cips.df["condition"].tolist() == [
+        "UNPROTECTED",
+        "PROTECTED",
+        "PROTECTED",
+        "OVER PROTECTED",
+        "OVER PROTECTED",
+    ]
+
+
+def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
+    data = _cips_track([-6.1, -6.101, -6.102])
+    del data["Voltage"]
+    # ON readings are all protected; OFF readings decide the condition
+    data["On Voltage"] = [-1.0, -1.0, -1.0]
+    data["Off Voltage"] = [-0.7, -0.9, -1.3]
+    path = _write_excel(tmp_path / "CIPS - ICCP cond.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
+    assert cips.df["protection"].tolist() == ["ICCP"] * 3
+    assert cips.df["condition"].tolist() == [
+        "UNPROTECTED",
+        "PROTECTED",
+        "OVER PROTECTED",
+    ]
+
+
+def _cips_iccp_track(on: list[float], off: list[float]) -> dict:
+    data = _cips_track([-6.1 - i * 0.001 for i in range(len(on))])
+    del data["Voltage"]
+    data["On Voltage"] = on
+    data["Off Voltage"] = off
+    return data
+
+
+def test_cips_clean_iccp_drops_rows_missing_on_or_off_voltage(tmp_path):
+    data = _cips_iccp_track(
+        on=[-1.0, -1.1, np.nan, -1.3],
+        off=[-0.9, np.nan, -0.95, -1.0],
+    )
+    path = _write_excel(tmp_path / "CIPS - ICCP gaps.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.protection == "ICCP"
+    assert list(cips.df.index) == [0, 3]
+    assert cips.df["Off Voltage"].notna().all()
+    assert cips.df["On Voltage"].notna().all()
+
+
+def test_cips_clean_iccp_without_off_voltage_raises(tmp_path):
+    data = _cips_iccp_track(on=[-1.0, -1.1], off=[np.nan, np.nan])
+    path = _write_excel(tmp_path / "CIPS - ICCP no off.xlsx", data)
+    with pytest.raises(ValueError, match="empty"):
+        CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+
+
+def test_cips_clean_sacp_keeps_rows_without_on_off_voltage(tmp_path):
+    data = _cips_track([-6.1, -6.101, -6.102])
+    data["Voltage"] = [-0.9, np.nan, -1.0]
+    path = _write_excel(tmp_path / "CIPS - SACP keep.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.protection == "SACP"
+    assert list(cips.df.index) == [0, 2]
+    assert cips.df["Off Voltage"].isna().all()
+
+
+def test_cips_iccp_sign_ignores_leading_empty_readings(tmp_path):
+    data = _cips_iccp_track(on=[np.nan, 1.0, 1.0], off=[np.nan, 0.9, 1.3])
+    path = _write_excel(tmp_path / "CIPS - ICCP leading nan.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.df["Voltage"].tolist() == [-1.0, -1.0]
+    assert cips.df["Off Voltage"].tolist() == [-0.9, -1.3]
+    assert cips.normalize().df["condition"].tolist() == ["PROTECTED", "OVER PROTECTED"]
+
+
+def test_cips_sacp_sign_ignores_leading_empty_readings(tmp_path):
+    data = _cips_track([-6.1, -6.101, -6.102])
+    data["Voltage"] = [np.nan, 0.9, 1.0]
+    path = _write_excel(tmp_path / "CIPS - SACP leading nan.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert cips.df["Voltage"].tolist() == [-0.9, -1.0]

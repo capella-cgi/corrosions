@@ -12,6 +12,7 @@ their fully qualified paths shown in each section.
 - [`corrosions.data.cips`](#corrosionsdatacips) — `CIPS`
 - [`corrosions.utils.dataframe_utils`](#corrosionsutilsdataframe_utils) — Excel sheet helpers
 - [`corrosions.utils.path_utils`](#corrosionsutilspath_utils) — path helpers
+- [`corrosions.utils.geo_utils`](#corrosionsutilsgeo_utils) — distance between coordinates
 
 ---
 
@@ -450,10 +451,14 @@ Call `fix()` first to check the data as `clean()` will see it.
      as the ON reading.
    - `Voltage` only → **SACP**.
 
-   ICCP copies `On Voltage` into `Voltage`, negated when the first reading
-   is positive. SACP keeps `Voltage` and sets `On Voltage` / `Off Voltage` to
-   NaN. Both add a `protection` column and set `self.protection`.
-3. `BaseData.clean()` drops:
+   Readings are stored as negative potentials: a column whose first
+   non-empty reading is positive is negated as a whole. ICCP copies `On Voltage` into
+   `Voltage` and negates `Voltage` and `Off Voltage` separately. SACP
+   negates `Voltage` and sets `On Voltage` / `Off Voltage` to NaN. Both add a
+   `protection` column and set `self.protection`.
+3. ICCP only: drops rows with an empty `On Voltage` or `Off Voltage`, since
+   an ICCP reading needs both. SACP only needs `Voltage`.
+4. `BaseData.clean()` drops:
    - all-empty rows;
    - rows whose `Latitude` or `Longitude` is `0` or empty;
    - rows with an empty `Voltage`;
@@ -461,6 +466,35 @@ Call `fix()` first to check the data as `clean()` will see it.
 
 - **Raises** `ValueError` if no voltage layout matches, if the filename is
   needed but names neither (or both) `ICCP` / `SACP`, or if no row is left.
+
+#### `normalize() -> Self`
+
+Add distances and a protection condition, then rename the columns to
+snake_case. Distances are computed with
+[`calculate_distance`](#corrosionsutilsgeo_utils) on whole columns.
+
+| Added column | Description |
+| --- | --- |
+| `distance` | Meters from the previous reading (`0` for the first). |
+| `real_distance` | Running total from the first reading, in meters. |
+| `condition` | `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`) or `UNPROTECTED` (anything else, including an empty reading). `V` is `Off Voltage` for ICCP and `Voltage` for SACP, in volts. |
+
+Renamed columns: `Latitude` → `latitude`, `Longitude` → `longitude`,
+`Voltage` → `voltage`, `On Voltage` → `on_voltage`, `Off Voltage` →
+`off_voltage`, `Comment` → `comment`, `DCP/Feature/DCVG Anomaly` →
+`dcp_feature_dcvg_anomaly`. `protection` already has its final name. Other
+columns keep their names.
+
+Rows are taken in their current order. The index is not used, so the gaps
+`clean()` leaves in it are fine. Call it once, after `clean()`, which sets
+`protection` and makes sure every coordinate is present and deduplicated.
+After the renaming, `check()`, `clean()` and `normalize()` cannot run again.
+
+```python
+cips = CIPS("segment.xlsx", year=2024).clean().normalize()
+cips.df["real_distance"].iloc[-1]   # survey length in meters
+cips.df["condition"].value_counts()
+```
 
 ---
 
@@ -498,4 +532,37 @@ from corrosions.utils.path_utils import resolve_output_dir
 
 out = resolve_output_dir()             # -> "<cwd>/output"
 out = resolve_output_dir("custom/out") # -> "custom/out" (created if missing)
+```
+
+---
+
+## `corrosions.utils.geo_utils`
+
+Also importable from `corrosions.utils`.
+
+### `EARTH_RADIUS_M: float`
+
+Mean Earth radius, `6_371_000.0` meters.
+
+### `calculate_distance(lat1, lon1, lat2, lon2) -> float | np.ndarray | pd.Series`
+
+Great-circle distance in **meters** between two points given in **degrees**,
+using the haversine formula on a sphere of radius `EARTH_RADIUS_M`.
+
+- Works on scalars, numpy arrays and pandas Series. Inputs broadcast, so one
+  side can be a single point.
+- Scalar inputs return a `float`. Series inputs return a Series with the same
+  index.
+- A NaN coordinate gives a NaN distance.
+
+```python
+from corrosions.utils import calculate_distance
+
+calculate_distance(-6.1, 106.1, -6.101, 106.1)   # 111.19...
+
+# distance from each reading to the previous one (first row is NaN)
+df["distance"] = calculate_distance(
+    df["Latitude"].shift(), df["Longitude"].shift(),
+    df["Latitude"], df["Longitude"],
+)
 ```

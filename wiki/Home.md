@@ -48,6 +48,7 @@ src/corrosions/
 │   └── cips.py         # CIPS(BaseData): single CIPS survey file
 └── utils/
     ├── dataframe_utils.py  # get_sheets / get_sheet_columns helpers
+    ├── geo_utils.py    # calculate_distance (haversine, Series-aware)
     └── path_utils.py   # resolve_output_dir helper
 ```
 

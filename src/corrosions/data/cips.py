@@ -7,6 +7,7 @@ import pandas as pd
 
 from corrosions.logging import logger
 from corrosions.data.base_data import BaseData
+from corrosions.utils.geo_utils import calculate_distance
 from corrosions.utils.dataframe_utils import get_sheet_columns
 
 
@@ -274,8 +275,11 @@ class CIPS(BaseData):
     def clean(self) -> Self:
         """Fix columns, normalize voltages, then drop unusable rows.
 
-        Runs ``fix`` if it has not run yet, then ``_fix_voltage``, then
-        ``BaseData.clean``: drops all-empty rows, rows whose ``Latitude`` or
+        Runs ``fix`` if it has not run yet, then ``_fix_voltage``. ICCP
+        readings need both ``On Voltage`` and ``Off Voltage``, so ICCP rows
+        missing either one are dropped. SACP only needs ``Voltage`` (its
+        ``On Voltage`` / ``Off Voltage`` are always empty). Then
+        ``BaseData.clean`` drops all-empty rows, rows whose ``Latitude`` or
         ``Longitude`` is ``0`` or empty, rows with an empty ``Voltage``, and
         duplicate (``Latitude``, ``Longitude``) rows (first reading kept).
 
@@ -288,7 +292,82 @@ class CIPS(BaseData):
         """
         self.fix()
         self._fix_voltage()
+        if self.protection == "ICCP":
+            self.df = self.df.dropna(subset=self.ICCP_COLUMNS)
         return super().clean()
+
+    def normalize(self) -> Self:
+        """Add distances and protection condition, then rename to snake_case.
+
+        Adds:
+
+        - ``distance``: meters from the previous reading (``0`` for the first).
+        - ``real_distance``: running total from the first reading, in meters.
+        - ``condition``: protection level of each reading, from ``Off Voltage``
+          for ICCP or ``Voltage`` for SACP (in volts):
+
+          - ``PROTECTED``: ``-1.2 < V <= -0.85``
+          - ``OVER PROTECTED``: ``V <= -1.2``
+          - ``UNPROTECTED``: anything else, including an empty reading.
+
+        Then renames the columns to snake_case: ``latitude``, ``longitude``,
+        ``voltage``, ``on_voltage``, ``off_voltage``, ``protection``,
+        ``comment`` and ``dcp_feature_dcvg_anomaly``. Other columns keep their
+        names.
+
+        Rows are taken in their current order. The index is not used, so the
+        gaps ``clean`` leaves in it are fine. Call once, after ``clean``:
+        ``clean`` sets ``protection`` and makes sure every coordinate is
+        present and deduplicated. Because of the renaming, ``check``,
+        ``clean`` and ``normalize`` cannot run again afterwards.
+
+        Returns:
+            Self: ``self``, to allow method chaining.
+
+        Example:
+            >>> cips = CIPS("segment.xlsx", year=2024).clean().normalize()
+            >>> cips.df["real_distance"].iloc[-1]  # survey length in meters
+            >>> cips.df["condition"].value_counts()
+        """
+
+        def _condition(voltage: float) -> str:
+            if -1.2 < voltage <= -0.85:
+                return "PROTECTED"
+            if voltage <= -1.2:
+                return "OVER PROTECTED"
+            return "UNPROTECTED"
+
+        df = self.df.copy()
+        lat, lon = df["Latitude"], df["Longitude"]
+        distance = pd.Series(
+            calculate_distance(lat.shift(), lon.shift(), lat, lon), index=df.index
+        ).fillna(0.0)
+
+        df["Distance"] = distance
+        df["Real Distance"] = distance.cumsum()
+
+        voltage_column = "Voltage" if self.protection == "SACP" else "Off Voltage"
+        df["Condition"] = df[voltage_column].apply(lambda x: _condition(x))
+
+        columns_mapping = {
+            "Voltage": "voltage",
+            "Off Voltage": "off_voltage",
+            "Latitude": "latitude",
+            "Longitude": "longitude",
+            "Distance": "distance",
+            "Real Distance": "real_distance",
+            "On Voltage": "on_voltage",
+            "protection": "protection",
+            "Condition": "condition",
+            "Comment": "comment",
+            "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
+        }
+
+        df = df.rename(columns=columns_mapping)
+
+        self.df = df
+
+        return self
 
     def _protection_from_filename(self) -> Literal["ICCP", "SACP"] | None:
         """Return ``ICCP`` / ``SACP`` when the filename names exactly one."""
@@ -313,7 +392,7 @@ class CIPS(BaseData):
         - ``Voltage`` only: SACP.
 
         Readings are stored as negative potentials. A column whose first
-        reading is positive is negated as a whole.
+        non-empty reading is positive is negated as a whole.
 
         - ICCP copies ``On Voltage`` into ``Voltage`` and negates ``Voltage``
           and ``Off Voltage`` independently (``On Voltage`` keeps the source
@@ -328,6 +407,17 @@ class CIPS(BaseData):
                 filename and it names neither (or both) ``ICCP`` / ``SACP``.
         """
 
+        def _as_negative(values: pd.Series) -> pd.Series:
+            """Negate ``values`` when its first non-empty reading is positive.
+
+            Empty leading rows are skipped, so they cannot hide the sign. An
+            all-empty column is returned unchanged.
+            """
+            readings = values.dropna()
+            if not readings.empty and readings.iloc[0] > 0:
+                return values * -1
+            return values
+
         def _fix_iccp(_df: pd.DataFrame) -> pd.DataFrame:
             """Fix and transform ICCP data."""
             if self.verbose:
@@ -336,12 +426,8 @@ class CIPS(BaseData):
             _df["On Voltage"] = pd.to_numeric(_df["On Voltage"], errors="coerce")
             _df["Off Voltage"] = pd.to_numeric(_df["Off Voltage"], errors="coerce")
 
-            _df["Voltage"] = _df["On Voltage"]
-            if _df.iloc[0]["Voltage"] > 0:
-                _df["Voltage"] = _df["Voltage"] * -1
-
-            if _df.iloc[0]["Off Voltage"] > 0:
-                _df["Off Voltage"] = _df["Off Voltage"] * -1
+            _df["Voltage"] = _as_negative(_df["On Voltage"])
+            _df["Off Voltage"] = _as_negative(_df["Off Voltage"])
 
             _df["protection"] = "ICCP"
             self.protection = "ICCP"
@@ -356,9 +442,9 @@ class CIPS(BaseData):
             _df["On Voltage"] = np.nan
             _df["Off Voltage"] = np.nan
 
-            _df["Voltage"] = pd.to_numeric(_df["Voltage"], errors="coerce")
-            if _df.iloc[0]["Voltage"] > 0:
-                _df["Voltage"] = _df["Voltage"] * -1
+            _df["Voltage"] = _as_negative(
+                pd.to_numeric(_df["Voltage"], errors="coerce")
+            )
 
             _df["protection"] = "SACP"
             self.protection = "SACP"
