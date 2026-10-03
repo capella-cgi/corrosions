@@ -2,7 +2,9 @@ import os
 import json
 
 import pandas as pd
+import pytest
 
+from corrosions.data.cips import CIPS
 from corrosions.data.file_index import FileIndex
 
 
@@ -33,7 +35,7 @@ def _write_index(path, rows: list[tuple[int, str | None]]) -> None:
         {
             "Year": [year for year, _ in rows],
             "Area": ["A"] * n,
-            "Segment": ["S"] * n,
+            "Segment": [f"S{i}" for i in range(n)],  # Segment + Diameter unique
             "Sub Segment": ["SS"] * n,
             "Diameter": [4.0] * n,
             "Length": [1.0] * n,
@@ -136,6 +138,11 @@ def test_check_cips_file(tmp_path, monkeypatch):
 
     # normalized file + protection land in the report and in index.df
     assert report.loc["good.xlsx", "cips_protection"] == "ICCP"
+    assert report.loc["good.xlsx", "normalized"]
+    assert not report.loc["unknown.xlsx", "normalized"]  # clean failed
+    assert not report.loc["missing.xlsx", "normalized"]  # never loaded
+    assert not report.loc["nodata.xlsx", "normalized"]  # load error
+    assert report["normalized"].dtype == bool  # no NaN from early returns
     assert report.loc["good.xlsx", "normalized_cips_file"] == "2024-good.json"
     assert os.path.isfile(
         tmp_path / "output" / "normalize" / "cips" / "json" / "2024-good.json"
@@ -160,6 +167,32 @@ def test_check_cips_file(tmp_path, monkeypatch):
     )
     assert set(skipped["year"]) == {2024}
     assert len(skipped) == 4
+
+
+def test_check_cips_file_normalize_failure(tmp_path, monkeypatch):
+    # n_jobs=1 runs in this process, so the patched normalize() is used
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    os.makedirs(data_dir / "2024" / "CIPS")
+    _write_sheets(data_dir / "2024" / "CIPS" / "good.xlsx", {"Data": _cips_data()})
+    index_path = tmp_path / "index.xlsx"
+    _write_index(index_path, [(2024, "good.xlsx")])
+
+    def _fail(self):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(CIPS, "normalize", _fail)
+    index = FileIndex(str(index_path))
+    report = index.check_cips_file(str(data_dir), n_jobs=1)
+
+    row = report.iloc[0]
+    assert not row["is_valid"]
+    assert not row["normalized"]
+    assert pd.isna(row["normalized_cips_file"])
+    assert row["reason"] == "normalize failed: OSError: disk full"
+    assert row["cips_protection"] == "ICCP"  # clean() still succeeded
+    assert pd.isna(index.df.loc[0, "normalized_cips_file"])
+    assert index.df.loc[0, "cips_protection"] == "ICCP"
 
 
 def test_skip_years_applies_to_every_data_type(tmp_path, monkeypatch):
@@ -270,3 +303,117 @@ def test_to_json(tmp_path):
     assert type(records[0]["pipe_diameter"]) is int
     assert type(records[0]["year"]) is int
     assert type(records[1]["length"]) is float
+
+
+def _write_value_index(path, rows: list[dict]) -> None:
+    defaults = {
+        "Year": 2024,
+        "Area": "A",
+        "Segment": "S",
+        "Sub Segment": "SS",
+        "Diameter": 4.0,
+        "Length": 1.0,
+        "Province Code": 31,
+        "ACVG/DCVG": None,
+        "CIPS": None,
+        "PCM": None,
+    }
+    pd.DataFrame([{**defaults, **row} for row in rows]).to_excel(path, index=False)
+
+
+def test_empty_area_raises_with_excel_rows(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(path, [{}, {"Area": None}, {"Area": "  "}])
+    with pytest.raises(ValueError, match=r"'Area' empty at Excel rows \[3, 4\]"):
+        FileIndex(str(path))
+
+
+def test_segment_may_be_empty_only_with_sub_segment(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path,
+        [
+            {"Segment": None, "Sub Segment": "From Sub"},  # filled by fix()
+            {"Segment": "Own", "Sub Segment": None},  # Sub Segment may be empty
+        ],
+    )
+    index = FileIndex(str(path))
+    assert index.fix().df["Segment"].tolist() == ["From Sub", "Own"]
+
+    _write_value_index(path, [{}, {"Segment": None, "Sub Segment": None}])
+    with pytest.raises(
+        ValueError, match=r"'Segment' and 'Sub Segment' empty at Excel rows \[3\]"
+    ):
+        FileIndex(str(path))
+
+
+def test_value_errors_are_combined_and_ignore_skipped_years(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path,
+        [
+            {"Year": 2021, "Area": None},  # row 2: skipped below
+            {"Area": None},  # row 3
+            {"Segment": None, "Sub Segment": None},  # row 4
+        ],
+    )
+    with pytest.raises(ValueError) as error:
+        FileIndex(str(path), skip_years=[2021])
+    message = str(error.value)
+    # row numbers still match the Excel file after skip_years removed row 2
+    assert "'Area' empty at Excel rows [3]" in message
+    assert "'Segment' and 'Sub Segment' empty at Excel rows [4]" in message
+
+    # the 2021 row alone does not block loading when its year is skipped
+    _write_value_index(path, [{"Year": 2021, "Area": None}, {}])
+    assert FileIndex(str(path), skip_years=[2021]).df["Year"].tolist() == [2024]
+
+
+def test_segment_and_diameter_must_be_unique(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path,
+        [
+            {"Segment": "Route", "Diameter": 16},  # row 2
+            {"Segment": None, "Sub Segment": "Route", "Diameter": 16},  # row 3
+            {"Segment": " Route ", "Diameter": 16},  # row 4: stripped -> Route
+            {"Segment": "Route", "Diameter": 10},  # row 5: other diameter, OK
+            {"Segment": "Other", "Sub Segment": "Route", "Diameter": 16},  # row 6
+        ],
+    )
+    with pytest.raises(ValueError) as error:
+        FileIndex(str(path))
+    message = str(error.value)
+    assert "'Segment' + 'Diameter' not unique" in message
+    # the Sub Segment of row 6 is not used, because its Segment is filled
+    assert "'Route' (16 in) at Excel rows [2, 3, 4]" in message
+    assert "(10 in)" not in message  # row 5: other diameter
+    assert "'Other'" not in message  # row 6: unique once its Segment is used
+
+    # same route, different diameters: two pipes, allowed
+    _write_value_index(
+        path,
+        [
+            {"Segment": None, "Sub Segment": "Unisma - Pd Ungu", "Diameter": 16},
+            {"Segment": None, "Sub Segment": "Unisma - Pd Ungu", "Diameter": 10},
+        ],
+    )
+    index = FileIndex(str(path))
+    assert index.fix().df["Segment"].tolist() == ["Unisma - Pd Ungu"] * 2
+
+
+def test_duplicates_in_skipped_years_are_ignored(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path,
+        [
+            {"Year": 2021, "Segment": "Route"},
+            {"Year": 2021, "Segment": "Route"},
+            {"Year": 2024, "Segment": "Route"},
+        ],
+    )
+    with pytest.raises(ValueError, match=r"at Excel rows \[2, 3, 4\]"):
+        FileIndex(str(path))
+    with pytest.raises(ValueError, match=r"at Excel rows \[2, 3\]"):
+        FileIndex(str(path), skip_years=[2024])
+    assert len(FileIndex(str(path), skip_years=[2021]).df) == 1

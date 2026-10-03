@@ -142,12 +142,39 @@ then remove the rows of `skip_years`.
   `None` (no year skipped).
 - **`verbose`** *(bool)* — enable progress logging inside `fix()`.
 - **Raises** `FileNotFoundError` if the file does not exist; `KeyError` if a
-  required column is missing after `drop_columns` is applied.
+  required column is missing after `drop_columns` is applied; `ValueError`
+  from [`validate_values`](#validate_valuesexcel_rows-pdseries--none--none---none)
+  if a row kept after `skip_years` has an empty `Area`, or an empty
+  `Segment` with no `Sub Segment` to fill it, or if the filled `Segment` +
+  `Diameter` is not unique.
 
 #### `validate() -> None`
 
 Ensure every column in `COLUMNS` is present in `df`. Raises `KeyError`
 otherwise.
+
+#### `validate_values(excel_rows: pd.Series | None = None) -> None`
+
+Ensure every row has the values the index needs. Called by `__init__` after
+`skip_years` is applied, so rows from skipped years are not checked.
+
+- `Area` must not be empty.
+- `Segment` may be empty only when `Sub Segment` is filled, because `fix()`
+  copies `Sub Segment` into an empty `Segment`. `Sub Segment` on its own may
+  be empty.
+- The segment after that fill (`Segment`, else `Sub Segment`) together with
+  `Diameter` must be unique, so every row gets its own `segment_code` in
+  `to_json`. The same route with two diameters (e.g. `Unisma - Pd Ungu` at
+  16 and 10 inch) is two pipes and allowed.
+- Text is compared with surrounding whitespace stripped; blank text (only
+  whitespace) counts as empty.
+
+Raises one `ValueError` listing every problem with its Excel row numbers,
+e.g. `'Area' empty at Excel rows [3]; 'Segment' and 'Sub Segment' empty at
+Excel rows [4]; 'Segment' + 'Diameter' not unique: 'Route' (16 in) at Excel
+rows [5, 6]`. `excel_rows` maps `df` rows to Excel rows; `__init__` passes
+it so the numbers still match the source file after `skip_years` removed
+rows. Defaults to `df.index + 2`, because the header is Excel row 1.
 
 #### `check_existing_file(data_dir: str) -> Self`
 
@@ -247,6 +274,7 @@ each result and merged into `df` by row afterwards.
 | `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
 | `cleaned_path` | Path of the saved cleaned copy; empty when cleaning failed. |
 | `cips_protection` | `"ICCP"` / `"SACP"`; empty when cleaning failed. |
+| `normalized` | `True` once `normalize()` wrote the Excel and JSON (`CIPS.normalized`); `False` otherwise. Only these rows get `normalized_cips_file` in `df`. |
 | `normalized_cips_file` | Filename of the normalized JSON; empty when cleaning or normalizing failed. |
 | `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning or normalizing fails (prefixed `clean failed:` / `normalize failed:`). |
 

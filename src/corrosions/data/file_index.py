@@ -93,6 +93,10 @@ class FileIndex:
             FileNotFoundError: If ``filepath`` does not exist.
             KeyError: If any required column in ``COLUMNS`` is missing after
                 ``drop_columns`` is applied.
+            ValueError: If a row kept after ``skip_years`` has an empty
+                ``Area``, or an empty ``Segment`` with no ``Sub Segment`` to
+                fill it from, or if the filled ``Segment`` + ``Diameter`` is
+                not unique (see ``validate_values``).
 
         Example:
             >>> index = FileIndex("IDDA - File List.xlsx", drop_columns="Notes")
@@ -123,14 +127,21 @@ class FileIndex:
         self.df["Length"] = self.df["Length"].astype(float)
         self.df["Province Code"] = self.df["Province Code"].astype(int)
 
+        # Excel row number of each df row (1-based, after the header row), kept
+        # through the skip_years filter so errors point at the source file.
+        excel_rows = pd.Series(range(2, len(self.df) + 2), index=self.df.index)
+
         self.skip_years: list[int] = sorted(set(skip_years or []))
         if self.skip_years:
             skipped = self.df["Year"].isin(self.skip_years)
             self.df = self.df[~skipped].reset_index(drop=True)
+            excel_rows = excel_rows[~skipped].reset_index(drop=True)
             if self.verbose:
                 logger.info(
                     f"Skipped {int(skipped.sum())} rows from years {self.skip_years}"
                 )
+
+        self.validate_values(excel_rows)
 
     def validate(self) -> None:
         """Ensure that all required columns are present in ``df``.
@@ -146,6 +157,72 @@ class FileIndex:
             raise KeyError(
                 f"Columns not found: {missing}. Columns needed: {self.COLUMNS}"
             )
+
+    def validate_values(self, excel_rows: pd.Series | None = None) -> None:
+        """Ensure every row has an ``Area`` and a unique, usable ``Segment``.
+
+        - ``Area`` must not be empty.
+        - ``Segment`` may be empty only when ``Sub Segment`` is filled,
+          because ``fix()`` copies ``Sub Segment`` into an empty ``Segment``.
+          ``Sub Segment`` on its own may be empty.
+        - The segment after that fill (``Segment``, else ``Sub Segment``)
+          together with ``Diameter`` must be unique, so every row gets its
+          own ``segment_code`` in ``to_json``. The same route with two
+          diameters (e.g. 16 and 10 inch) is two different pipes and allowed.
+
+        Text is compared with surrounding whitespace stripped, and blank text
+        (only whitespace) counts as empty.
+
+        Args:
+            excel_rows (pd.Series | None): Excel row number of each ``df`` row,
+                used in the error message. Defaults to ``df.index + 2`` (the
+                header is Excel row 1).
+
+        Raises:
+            ValueError: Listing the Excel rows with an empty ``Area``, the
+                rows with both ``Segment`` and ``Sub Segment`` empty, and
+                each duplicated segment + diameter with its rows.
+
+        Example:
+            >>> index.validate_values()
+        """
+        if excel_rows is None:
+            excel_rows = pd.Series(self.df.index + 2, index=self.df.index)
+
+        def _text(column: str) -> pd.Series:
+            return self.df[column].astype("string").str.strip()
+
+        def _empty(column: str) -> pd.Series:
+            return _text(column).fillna("").eq("")
+
+        empty_segment = _empty("Segment") & _empty("Sub Segment")
+        problems = {
+            "'Area'": _empty("Area"),
+            "'Segment' and 'Sub Segment'": empty_segment,
+        }
+        messages = [
+            f"{columns} empty at Excel rows {excel_rows[empty].tolist()}"
+            for columns, empty in problems.items()
+            if empty.any()
+        ]
+
+        # Same fill as fix(); rows with no segment at all are reported above.
+        segment = _text("Segment").where(~_empty("Segment"), _text("Sub Segment"))
+        keys = pd.DataFrame({"segment": segment, "diameter": self.df["Diameter"]})
+        keys = keys[~empty_segment]
+        duplicated = keys[keys.duplicated(keep=False)]
+        if not duplicated.empty:
+            groups = [
+                f"{name!r} ({diameter:g} in) at Excel rows "
+                f"{excel_rows[group.index].tolist()}"
+                for (name, diameter), group in duplicated.groupby(
+                    ["segment", "diameter"], sort=False
+                )
+            ]
+            messages.append("'Segment' + 'Diameter' not unique: " + ", ".join(groups))
+
+        if messages:
+            raise ValueError(f"{self.filepath}: " + "; ".join(messages))
 
     def check_existing_file(self, data_dir: str) -> Self:
         """Flag which referenced files exist under ``data_dir``.
@@ -202,6 +279,9 @@ class FileIndex:
             >>> index.fix()
         """
         df = self.df.copy()
+        # An all-empty Segment column is read as float64, which cannot hold
+        # the Sub Segment text copied in below.
+        df["Segment"] = df["Segment"].astype(object)
 
         segment_updated = 0
         filename_updated = 0
@@ -438,7 +518,8 @@ class FileIndex:
                 (sheet loaded), ``candidate_sheets`` (every qualifying sheet,
                 best first), ``has_voltage``, ``n_missing``,
                 ``missing_columns``, ``n_duplicates``, ``cleaned_path``,
-                ``cips_protection``, ``normalized_cips_file`` and ``reason``.
+                ``cips_protection``, ``normalized`` (``CIPS.normalized``),
+                ``normalized_cips_file`` and ``reason``.
                 Check columns describe the file before cleaning.
                 The per-row duplicate list is left out: CIPS files can repeat
                 thousands of GPS points, too many for an Excel cell, and
@@ -447,8 +528,9 @@ class FileIndex:
                 fails. Rows with a missing file, no data sheet, a load error,
                 a clean error or a normalize error get a ``reason``.
                 ``cleaned_path`` / ``cips_protection`` are set only when the
-                cleaned copy was saved, ``normalized_cips_file`` only when
-                the normalized files were written.
+                cleaned copy was saved. ``normalized`` is True and
+                ``normalized_cips_file`` is set only when the normalized
+                files were written.
 
         Example:
             >>> report = index.check_cips_file("output/raw_data", n_jobs=-1)
@@ -466,6 +548,7 @@ class FileIndex:
             "n_duplicates",
             "cleaned_path",
             "cips_protection",
+            "normalized",
             "normalized_cips_file",
             "reason",
         ]
@@ -478,6 +561,7 @@ class FileIndex:
                     "year": year,
                     "filepath": filepath,
                     "is_valid": False,
+                    "normalized": False,
                     "reason": "file not found on disk",
                 }
 
@@ -489,6 +573,7 @@ class FileIndex:
                     "year": year,
                     "filepath": filepath,
                     "is_valid": False,
+                    "normalized": False,
                     "reason": f"{type(e).__name__}: {e}",
                 }
 
@@ -498,6 +583,7 @@ class FileIndex:
                 "candidate_sheets": candidates,
                 "cleaned_path": None,
                 "cips_protection": None,
+                "normalized": False,
                 "normalized_cips_file": None,
                 "reason": None,
             }
@@ -519,9 +605,12 @@ class FileIndex:
                 result["reason"] = f"normalize failed: {type(e).__name__}: {e}"
                 return result
 
-            result["normalized_cips_file"] = os.path.basename(
-                cips.normalize_json_filepath
-            )
+            # cips lives in this worker process: send its state back in result
+            result["normalized"] = cips.normalized
+            if cips.normalized:
+                result["normalized_cips_file"] = os.path.basename(
+                    cips.normalize_json_filepath
+                )
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
@@ -530,14 +619,19 @@ class FileIndex:
         )
 
         # Workers run in separate processes and cannot update self.df, so
-        # their results are merged back here by row label (row.name).
+        # their results are merged back here by row label (row.name). Only
+        # files that were actually normalized get a normalized_cips_file.
+        merged = {
+            "normalized_cips_file": [
+                result.get("normalized_cips_file") if result.get("normalized") else None
+                for result in results
+            ],
+            "cips_protection": [result.get("cips_protection") for result in results],
+        }
         df = self.df.copy()
         labels = [row.name for row in rows]
-        for column in ("normalized_cips_file", "cips_protection"):
-            values = pd.Series(
-                [result.get(column) for result in results], index=labels, dtype=object
-            )
-            df[column] = values.reindex(df.index)
+        for column, values in merged.items():
+            df[column] = pd.Series(values, index=labels, dtype=object).reindex(df.index)
         self.df = df
 
         return pd.DataFrame(results, columns=columns)
