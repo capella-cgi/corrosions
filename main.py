@@ -3,7 +3,7 @@
 Mirrors ``file-index.ipynb``: load the index (leaving out ``--skip-years``),
 fix filenames, copy the existing files into ``<output_dir>/raw_data``, then
 write one report per data type to ``<output_dir>/checked-cips.xlsx`` /
-``checked-pcm.xlsx``.
+``checked-pcm.xlsx``, and the index as JSON to ``<output_dir>/file_index.json``.
 
 Example:
     uv run main.py                     # check both CIPS and PCM, skip 2021
@@ -108,6 +108,8 @@ def main() -> None:
     if args.type in ("all", "pcm"):
         checked = fi.check_pcm_file(data_dir=data_dir, n_jobs=args.n_jobs)
         save_report(checked, os.path.join(output_dir, "checked-pcm.xlsx"))
+
+    print(f"Index JSON -> {fi.to_json(output_dir)}")
 
 
 if __name__ == "__main__":

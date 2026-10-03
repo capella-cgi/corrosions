@@ -1,4 +1,5 @@
 import os
+import json
 
 import numpy as np
 import pandas as pd
@@ -381,8 +382,10 @@ def test_cips_normalize_after_clean_leaves_index_gaps(tmp_path):
 def test_cips_normalize_saves_excel_and_json(tmp_path):
     data = {**_cips_track([-6.1, -6.101])}
     del data["Voltage"]
+    del data["Comment"]  # fix() adds an empty ("") Comment column
     data["On Voltage"] = [-1.0, -1.0]
     data["Off Voltage"] = [-0.9, -0.9]
+    data["DCP/Feature/DCVG Anomaly"] = ["", "TS"]
     path = _write_excel(tmp_path / "CIPS - ICCP cols.xlsx", data)
     out = tmp_path / "out"
     cips = CIPS(path, year=2024, output_dir=str(out)).clean().normalize()
@@ -397,25 +400,41 @@ def test_cips_normalize_saves_excel_and_json(tmp_path):
     assert "Unnamed: 0" not in excel.columns
     assert {"Distance", "Real Distance", "Condition"} <= set(excel.columns)
 
-    # JSON: one record per row, snake_case column names
+    assert "Protection" in excel.columns
+
+    # JSON: one record per row, only the selected columns, snake_case names
     assert cips.normalize_json_filepath == str(
         out / "normalize" / "cips" / "json" / "2024-cips-iccp-cols.json"
     )
-    records = pd.read_json(cips.normalize_json_filepath, orient="records")
+    with open(cips.normalize_json_filepath, encoding="utf-8") as f:
+        records = json.load(f)
     assert len(records) == 2
-    assert set(records.columns) == {
+    assert list(records[0]) == [
+        "voltage",
+        "off_voltage",
         "latitude",
         "longitude",
-        "voltage",
-        "on_voltage",
-        "off_voltage",
-        "protection",
-        "comment",
-        "dcp_feature_dcvg_anomaly",
-        "distance",
         "real_distance",
         "condition",
-    }
+        "comment",
+        "dcp_feature_dcvg_anomaly",
+    ]
+
+    # empty cells are null: the "" Comment from fix() and the blank DCP cell
+    assert [r["comment"] for r in records] == [None, None]
+    assert [r["dcp_feature_dcvg_anomaly"] for r in records] == [None, "TS"]
+    assert records[1]["off_voltage"] == -0.9
+
+
+def test_cips_normalize_json_sacp_off_voltage_is_null(tmp_path):
+    data = _cips_track([-6.1, -6.101])
+    data["Comment"] = ["  ", "note"]  # whitespace-only counts as empty
+    path = _write_excel(tmp_path / "CIPS - SACP json.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
+    with open(cips.normalize_json_filepath, encoding="utf-8") as f:
+        records = json.load(f)
+    assert [r["off_voltage"] for r in records] == [None, None]
+    assert [r["comment"] for r in records] == [None, "note"]
 
 
 def test_cips_normalize_before_clean_raises(tmp_path):
@@ -465,7 +484,7 @@ def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
     data["Off Voltage"] = [-0.7, -0.9, -1.3]
     path = _write_excel(tmp_path / "CIPS - ICCP cond.xlsx", data)
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
-    assert cips.df["protection"].tolist() == ["ICCP"] * 3
+    assert cips.df["Protection"].tolist() == ["ICCP"] * 3
     assert cips.df["Condition"].tolist() == [
         "UNPROTECTED",
         "PROTECTED",

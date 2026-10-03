@@ -219,22 +219,59 @@ Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
 file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
 backend like `check_pcm_file`. The data sheet is located, column names
 are aligned, then checked. Then `clean().save()` writes a cleaned copy to
-`<cwd>/output/cleaned/<year>/CIPS/`. The two steps are separate, so a file
-that fails to clean still reports its column checks. Check columns describe
-the file before cleaning.
+`<cwd>/output/cleaned/<year>/CIPS/` and [`normalize()`](#normalize---self)
+writes the normalized Excel/JSON under `<cwd>/output/normalize/cips/`. The
+steps are separate, so a file that fails to clean still reports its column
+checks. Check columns describe the file before cleaning.
+
+It also adds two columns to `df`, used by [`to_json`](#to_jsonoutput_dir-str--none--none---str).
+They are empty for rows without a CIPS file, or whose file failed to
+clean/normalize:
+
+- `normalized_cips_file`: filename of the normalized JSON
+  (`CIPS.normalize_json_filepath`), e.g. `2025-cips-sacp-01-jkt-….json`.
+- `cips_protection`: `"ICCP"` or `"SACP"`.
+
+The workers run in separate processes, so these values are returned with
+each result and merged into `df` by row afterwards.
 
 | Column | Description |
 | --- | --- |
 | `year` | Survey year for the row. |
 | `filepath` | Full path to the referenced CIPS file. |
-| `is_valid` | `True` when no required column is missing, a voltage column exists, and `clean()` succeeded. Duplicates do not count. |
+| `is_valid` | `True` when no required column is missing, a voltage column exists, and `clean()` and `normalize()` succeeded. Duplicates do not count. |
 | `sheet_name` | Sheet that was loaded. |
 | `candidate_sheets` | Every qualifying sheet, best match first. |
 | `has_voltage` | At least one of `On Voltage`, `Off Voltage`, `Voltage` present. |
 | `n_missing` / `missing_columns` | Required columns missing after `fix()`. |
 | `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
 | `cleaned_path` | Path of the saved cleaned copy; empty when cleaning failed. |
-| `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning fails (prefixed `clean failed:`). |
+| `cips_protection` | `"ICCP"` / `"SACP"`; empty when cleaning failed. |
+| `normalized_cips_file` | Filename of the normalized JSON; empty when cleaning or normalizing failed. |
+| `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning or normalizing fails (prefixed `clean failed:` / `normalize failed:`). |
+
+#### `to_json(output_dir: str | None = None) -> str`
+
+Write the index as JSON records to `<output_dir>/file_index.json`
+(`output_dir` defaults to `<cwd>/output`) and return the path. Runs `fix()`
+first if needed, so empty `Segment` values are filled from `Sub Segment`.
+Empty values are written as `null`.
+
+| Key | Source |
+| --- | --- |
+| `id` | Row position, `0..n-1`. |
+| `year`, `area` | `Year`, `Area`. |
+| `area_code` | Slug of `<area>-<year>`, e.g. `jakarta-2025`. |
+| `segment` | `Segment`. |
+| `pipe_diameter` | `Diameter`, as an int when whole (`16`, not `16.0`). |
+| `length` | `Length`, always a float (`2.0` stays `2.0`). |
+| `segment_code` | Slug of `<segment>-<pipe_diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
+| `cips_protection`, `normalized_cips_file` | Set by `check_cips_file`; `null` until it ran. |
+
+```python
+index.check_cips_file("output/raw_data", n_jobs=-1)
+index.to_json()   # "output/file_index.json"
+```
 
 #### `save(output_dir: str | None = None) -> None`
 
@@ -471,7 +508,7 @@ Call `fix()` first to check the data as `clean()` will see it.
    non-empty reading is positive is negated as a whole. ICCP copies `On Voltage` into
    `Voltage` and negates `Voltage` and `Off Voltage` separately. SACP
    negates `Voltage` and sets `On Voltage` / `Off Voltage` to NaN. Both add a
-   `protection` column and set `self.protection`.
+   `Protection` column and set `self.protection`.
 3. ICCP only: drops rows with an empty `On Voltage` or `Off Voltage`, since
    an ICCP reading needs both. SACP only needs `Voltage`.
 4. `BaseData.clean()` drops:
@@ -498,7 +535,7 @@ and JSON. Distances are computed with
 | File | Content |
 | --- | --- |
 | `normalize_excel_filepath` = `<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
-| `normalize_json_filepath` = `<output_dir>/normalize/cips/json/<year>-<slug>.json` | One record per row, with snake_case names: `latitude`, `longitude`, `voltage`, `on_voltage`, `off_voltage`, `protection`, `distance`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly`. Other columns keep their names. |
+| `normalize_json_filepath` = `<output_dir>/normalize/cips/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly`. Empty cells are `null`, including empty or blank text (such as the `""` `Comment` added by `fix()`). `off_voltage` is always `null` for SACP. |
 
 `<slug>` is the slugified source filename without its extension. `df` keeps
 the original column names, and `normalized` is set to `True` once both files

@@ -1,4 +1,5 @@
 import os
+import json
 
 import pandas as pd
 
@@ -95,7 +96,8 @@ def test_check_cips_file(tmp_path, monkeypatch):
         ],
     )
 
-    report = FileIndex(str(index_path)).check_cips_file(str(data_dir))
+    index = FileIndex(str(index_path))
+    report = index.check_cips_file(str(data_dir))
     report.index = [os.path.basename(p) for p in report["filepath"]]
 
     assert len(report) == 7  # row with no CIPS filename is skipped
@@ -131,6 +133,26 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert "No CIPS data sheet" in report.loc["nodata.xlsx", "reason"]
 
     assert report.loc["missing.xlsx", "reason"] == "file not found on disk"
+
+    # normalized file + protection land in the report and in index.df
+    assert report.loc["good.xlsx", "cips_protection"] == "ICCP"
+    assert report.loc["good.xlsx", "normalized_cips_file"] == "2024-good.json"
+    assert os.path.isfile(
+        tmp_path / "output" / "normalize" / "cips" / "json" / "2024-good.json"
+    )
+    assert index.df["normalized_cips_file"].tolist()[:3] == [
+        "2024-good.json",
+        "2022-cips-iccp-legacy.json",
+        None,  # unknown.xlsx: clean failed
+    ]
+    assert index.df["cips_protection"].tolist()[:3] == ["ICCP", "ICCP", None]
+    assert pd.isna(index.df.loc[6, "normalized_cips_file"])  # missing.xlsx
+    assert pd.isna(index.df.loc[7, "cips_protection"])  # no CIPS filename
+
+    records = json.loads(open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read())
+    assert records[0]["cips_protection"] == "ICCP"
+    assert records[0]["normalized_cips_file"] == "2024-good.json"
+    assert records[2]["normalized_cips_file"] is None
 
     # skip_years leaves those years out of the report entirely
     skipped = FileIndex(str(index_path), skip_years=[2021, 2022]).check_cips_file(
@@ -192,3 +214,59 @@ def test_rebuild_fixes_filenames_before_checking_existence(tmp_path):
     assert index.df.loc[0, "CIPS"] == "seg.xlsx"
     assert index.df.loc[0, "CIPS File Exists"]
     assert os.path.isfile(out / "raw_data" / "2024" / "CIPS" / "seg.xlsx")
+
+
+def test_to_json(tmp_path):
+    index_path = tmp_path / "index.xlsx"
+    pd.DataFrame(
+        {
+            "Year": [2025, 2025],
+            "Area": ["Jakarta", "Jakarta"],
+            "Segment": [None, "RE Martadinata"],
+            "Sub Segment": ["Pipa Servis Indonesia Power", "Sub"],
+            "Diameter": [16, 10.5],
+            "Length": [1.75, 2.0],
+            "Province Code": [31, 31],
+            "ACVG/DCVG": [None, None],
+            "CIPS": ["CIPS - SACP 01.xlsx", None],
+            "PCM": [None, None],
+        }
+    ).to_excel(index_path, index=False)
+
+    out = tmp_path / "out"
+    path = FileIndex(str(index_path)).to_json(str(out))
+    assert path == os.path.join(str(out), "file_index.json")
+
+    with open(path, encoding="utf-8") as f:
+        records = json.load(f)
+
+    assert records == [
+        {
+            "id": 0,
+            "year": 2025,
+            "area": "Jakarta",
+            "area_code": "jakarta-2025",
+            "segment": "Pipa Servis Indonesia Power",  # filled from Sub Segment
+            "pipe_diameter": 16,
+            "length": 1.75,
+            "segment_code": "pipa-servis-indonesia-power-16",
+            "cips_protection": None,  # check_cips_file has not run
+            "normalized_cips_file": None,
+        },
+        {
+            "id": 1,
+            "year": 2025,
+            "area": "Jakarta",
+            "area_code": "jakarta-2025",
+            "segment": "RE Martadinata",
+            "pipe_diameter": 10.5,
+            "length": 2.0,  # length stays a float even when whole
+            "segment_code": "re-martadinata-10-5",
+            "cips_protection": None,
+            "normalized_cips_file": None,
+        },
+    ]
+    # == cannot tell 16 from 16.0, so check the JSON types explicitly
+    assert type(records[0]["pipe_diameter"]) is int
+    assert type(records[0]["year"]) is int
+    assert type(records[1]["length"]) is float

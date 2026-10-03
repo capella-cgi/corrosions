@@ -26,6 +26,10 @@ report per data type:
   with a `clean failed: …` reason.
 - `checked-pcm.xlsx`: missing columns and duplicate GPS rows per file, after
   cleaning (cleaned copies go to `output/cleaned/<year>/PCM/`).
+- `file_index.json`: one record per index row (`year`, `area`, `area_code`,
+  `segment`, `pipe_diameter`, `length`, `segment_code`, `cips_protection`,
+  `normalized_cips_file`). CIPS files are also normalized into
+  `output/normalize/cips/excel|json/`.
 
 Close the reports in Excel before rerunning; Windows locks open files.
 

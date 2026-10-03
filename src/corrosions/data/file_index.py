@@ -12,6 +12,7 @@ Example:
 """
 
 import os
+import json
 import shutil
 from typing import Self
 
@@ -406,14 +407,23 @@ class FileIndex:
         return pd.DataFrame(results, columns=columns)
 
     def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
-        """Check, clean and save every referenced CIPS file.
+        """Check, clean, save and normalize every referenced CIPS file.
 
         Each file runs through ``CIPS(...).fix().check()``: the data sheet is
         located (CIPS workbooks are not uniform, see ``CIPS.find_sheet``),
         column names are aligned (``CIPS.fix``), then checked
         (``CIPS.check``). Then ``clean().save()`` writes a cleaned copy to
-        ``<cwd>/output/cleaned/<year>/CIPS/``. The two steps are separate,
-        so a file that fails to clean still reports its column checks.
+        ``<cwd>/output/cleaned/<year>/CIPS/`` and ``normalize()`` writes the
+        normalized Excel/JSON under ``<cwd>/output/normalize/cips/``. The
+        steps are separate, so a file that fails to clean still reports its
+        column checks.
+
+        Also adds two columns to ``df``, used by ``to_json`` (``None`` for
+        rows without a CIPS file, or whose file failed to clean/normalize):
+
+        - ``normalized_cips_file``: filename of the normalized JSON
+          (``CIPS.normalize_json_filepath``).
+        - ``cips_protection``: ``"ICCP"`` or ``"SACP"``.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned
@@ -427,15 +437,18 @@ class FileIndex:
                 columns ``year``, ``filepath``, ``is_valid``, ``sheet_name``
                 (sheet loaded), ``candidate_sheets`` (every qualifying sheet,
                 best first), ``has_voltage``, ``n_missing``,
-                ``missing_columns``, ``n_duplicates``, ``cleaned_path`` and
-                ``reason``. Check columns describe the file before cleaning.
+                ``missing_columns``, ``n_duplicates``, ``cleaned_path``,
+                ``cips_protection``, ``normalized_cips_file`` and ``reason``.
+                Check columns describe the file before cleaning.
                 The per-row duplicate list is left out: CIPS files can repeat
                 thousands of GPS points, too many for an Excel cell, and
                 duplicates do not affect ``is_valid`` (``clean`` removes them).
-                ``is_valid`` is False when a check fails or cleaning fails.
-                Rows with a missing file, no data sheet, a load error or a
-                clean error get a ``reason``. ``cleaned_path`` is set only
-                when the cleaned copy was saved.
+                ``is_valid`` is False when a check, cleaning or normalizing
+                fails. Rows with a missing file, no data sheet, a load error,
+                a clean error or a normalize error get a ``reason``.
+                ``cleaned_path`` / ``cips_protection`` are set only when the
+                cleaned copy was saved, ``normalized_cips_file`` only when
+                the normalized files were written.
 
         Example:
             >>> report = index.check_cips_file("output/raw_data", n_jobs=-1)
@@ -452,6 +465,8 @@ class FileIndex:
             "missing_columns",
             "n_duplicates",
             "cleaned_path",
+            "cips_protection",
+            "normalized_cips_file",
             "reason",
         ]
 
@@ -482,6 +497,8 @@ class FileIndex:
                 **cips.report,
                 "candidate_sheets": candidates,
                 "cleaned_path": None,
+                "cips_protection": None,
+                "normalized_cips_file": None,
                 "reason": None,
             }
 
@@ -493,7 +510,18 @@ class FileIndex:
                 return result
 
             result["cleaned_path"] = cips.cleaned_path
-            cips.normalize()
+            result["cips_protection"] = cips.protection
+
+            try:
+                cips.normalize()
+            except Exception as e:
+                result["is_valid"] = False
+                result["reason"] = f"normalize failed: {type(e).__name__}: {e}"
+                return result
+
+            result["normalized_cips_file"] = os.path.basename(
+                cips.normalize_json_filepath
+            )
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
@@ -501,7 +529,89 @@ class FileIndex:
             delayed(_check_row)(row) for row in rows
         )
 
+        # Workers run in separate processes and cannot update self.df, so
+        # their results are merged back here by row label (row.name).
+        df = self.df.copy()
+        labels = [row.name for row in rows]
+        for column in ("normalized_cips_file", "cips_protection"):
+            values = pd.Series(
+                [result.get(column) for result in results], index=labels, dtype=object
+            )
+            df[column] = values.reindex(df.index)
+        self.df = df
+
         return pd.DataFrame(results, columns=columns)
+
+    def to_json(self, output_dir: str | None = None) -> str:
+        """Write the index as JSON records to ``<output_dir>/file_index.json``.
+
+        Runs ``fix()`` first if needed, so empty ``Segment`` values are filled
+        from ``Sub Segment``. One record per row of ``df``:
+
+        - ``id`` (int): position, ``0..n-1``.
+        - ``year`` (int), ``area`` (str).
+        - ``area_code`` (str): slug of ``<area>-<year>``, e.g.
+          ``"jakarta-2025"``.
+        - ``segment`` (str).
+        - ``pipe_diameter`` (int | float): ``Diameter``, as an int when whole.
+        - ``length`` (float).
+        - ``segment_code`` (str): slug of ``<segment>-<pipe_diameter>``, e.g.
+          ``"pipa-servis-indonesia-power-16"``.
+        - ``cips_protection`` (str | None) and ``normalized_cips_file``
+          (str | None): set by ``check_cips_file``; ``None`` until it ran,
+          and for rows without a usable CIPS file.
+
+        Empty values are written as ``null``.
+
+        Args:
+            output_dir (str | None): Destination directory. Defaults to
+                ``<cwd>/output``.
+
+        Returns:
+            str: Path of the written JSON file.
+
+        Example:
+            >>> index.check_cips_file("output/raw_data", n_jobs=-1)
+            >>> index.to_json()
+            'output/file_index.json'
+        """
+        if not self.fixed:
+            self.fix()
+
+        records = []
+        for position, (_, row) in enumerate(self.df.iterrows()):
+            year = _json_value(row["Year"], whole_as_int=True)
+            area = _json_value(row["Area"])
+            segment = _json_value(row["Segment"])
+            diameter = _json_value(row["Diameter"], whole_as_int=True)
+            records.append(
+                {
+                    "id": position,
+                    "year": year,
+                    "area": area,
+                    "area_code": slugify(f"{area}-{year}"),
+                    "segment": segment,
+                    "pipe_diameter": diameter,
+                    "length": _json_value(row["Length"]),
+                    "segment_code": (
+                        slugify(f"{segment}-{diameter}") if segment else None
+                    ),
+                    "cips_protection": _json_value(row.get("cips_protection")),
+                    "normalized_cips_file": _json_value(
+                        row.get("normalized_cips_file")
+                    ),
+                }
+            )
+
+        output_dir = resolve_output_dir(output_dir)
+        filepath = os.path.join(output_dir, "file_index.json")
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=4, ensure_ascii=False)
+
+        if self.verbose:
+            logger.info(f"Wrote {len(records)} records to {filepath}")
+
+        return filepath
 
     def save(self, output_dir: str | None = None) -> None:
         """Write ``df`` to ``<output_dir>/file_index_<slug>.csv``.
@@ -517,3 +627,18 @@ class FileIndex:
         filepath = os.path.join(output_dir, filename)
 
         self.df.to_csv(filepath, index=False)
+
+
+def _json_value(value, whole_as_int: bool = False):
+    """Return ``value`` as a JSON-ready Python scalar.
+
+    NaN / ``None`` become ``None`` and numpy scalars become Python ones. With
+    ``whole_as_int``, whole floats become ints (``16.0`` -> ``16``).
+    """
+    if value is None or pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        value = value.item()
+    if whole_as_int and isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value

@@ -313,10 +313,12 @@ class CIPS(BaseData):
           with its original column names, without the index.
         - ``normalize_json_filepath``
           (``<output_dir>/normalize/cips/json/<year>-<slug>.json``): one record
-          per row, with snake_case names: ``latitude``, ``longitude``,
-          ``voltage``, ``on_voltage``, ``off_voltage``, ``protection``,
-          ``distance``, ``real_distance``, ``condition``, ``comment`` and
-          ``dcp_feature_dcvg_anomaly``. Other columns keep their names.
+          per row with only these keys, in this order: ``voltage``,
+          ``off_voltage``, ``latitude``, ``longitude``, ``real_distance``,
+          ``condition``, ``comment`` and ``dcp_feature_dcvg_anomaly``. Empty
+          cells are ``null``, including empty or blank text (such as the
+          ``""`` ``Comment`` added by ``fix``). ``off_voltage`` is always
+          ``null`` for SACP.
 
         Rows are taken in their current order. The index is not used, so the
         gaps ``clean`` leaves in it are fine. Call after ``clean``, which sets
@@ -365,22 +367,33 @@ class CIPS(BaseData):
 
         self.df = df
 
+        json_selected_columns = [
+            "Voltage",
+            "Off Voltage",
+            "Latitude",
+            "Longitude",
+            "Real Distance",
+            "Condition",
+            "Comment",
+            "DCP/Feature/DCVG Anomaly",
+        ]
+
         columns_mapping = {
             "Voltage": "voltage",
             "Off Voltage": "off_voltage",
             "Latitude": "latitude",
             "Longitude": "longitude",
-            "Distance": "distance",
             "Real Distance": "real_distance",
-            "On Voltage": "on_voltage",
-            "protection": "protection",
             "Condition": "condition",
             "Comment": "comment",
             "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
         }
 
-        # Save to JSON with modified column name
+        # Save to JSON with modified column name. Empty or blank text cells
+        # (e.g. the "" Comment added by fix) become null, like empty numbers.
+        df = df[json_selected_columns]
         df = df.rename(columns=columns_mapping)
+        df = df.map(lambda v: None if isinstance(v, str) and not v.strip() else v)
         os.makedirs(self.normalize_json_dir, exist_ok=True)
         df.to_json(self.normalize_json_filepath, orient="records")
 
@@ -419,7 +432,7 @@ class CIPS(BaseData):
         - SACP negates ``Voltage`` and sets ``On Voltage`` / ``Off Voltage``
           to NaN.
 
-        Both add a ``protection`` column and set ``self.protection``.
+        Both add a ``Protection`` column and set ``self.protection``.
 
         Raises:
             ValueError: If no ICCP/SACP layout matches, or the layout needs the
@@ -448,7 +461,7 @@ class CIPS(BaseData):
             _df["Voltage"] = _as_negative(_df["On Voltage"])
             _df["Off Voltage"] = _as_negative(_df["Off Voltage"])
 
-            _df["protection"] = "ICCP"
+            _df["Protection"] = "ICCP"
             self.protection = "ICCP"
 
             return _df
@@ -465,7 +478,7 @@ class CIPS(BaseData):
                 pd.to_numeric(_df["Voltage"], errors="coerce")
             )
 
-            _df["protection"] = "SACP"
+            _df["Protection"] = "SACP"
             self.protection = "SACP"
 
             return _df
