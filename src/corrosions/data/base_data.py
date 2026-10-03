@@ -1,7 +1,9 @@
 import os
 from typing import Self, Literal
+from pathlib import Path
 
 import pandas as pd
+from slugify import slugify
 
 from corrosions.utils.path_utils import resolve_output_dir
 
@@ -14,7 +16,7 @@ class BaseData:
 
     Attributes:
         KIND (Literal["pcm", "cips"]): Survey type; names the cleaned output
-            sub-directory (upper-cased).
+            sub-directory (upper-cased) and the normalize one (lower-cased).
         REQUIRED_COLUMNS (list[str]): Columns expected in the source Excel.
         NUMERIC_COLUMNS (list[str]): Columns coerced to numeric via
             ``pd.to_numeric(..., errors="coerce")`` at load time.
@@ -31,6 +33,16 @@ class BaseData:
         output_dir (str): Resolved output directory for downstream artifacts.
         cleaned_dir (str): ``<output_dir>/cleaned/<year>/<KIND>``.
         cleaned_path (str | None): Path of the saved Excel once ``save`` ran.
+        normalize_dir (str): ``<output_dir>/normalize/<kind>``.
+        normalize_excel_dir (str): ``<normalize_dir>/excel``.
+        normalize_json_dir (str): ``<normalize_dir>/json``.
+        normalize_excel_filepath (str): Excel written by a subclass
+            ``normalize``: ``<normalize_excel_dir>/<year>-<slug>.xlsx``, where
+            ``<slug>`` is the slugified source filename without its extension.
+        normalize_json_filepath (str): JSON written by a subclass
+            ``normalize``: ``<normalize_json_dir>/<year>-<slug>.json``.
+        normalized (bool): True once a subclass ``normalize`` wrote both files.
+            Stays False for subclasses without ``normalize`` (``PCM``).
         report (dict): Summary from the last ``check`` call; empty until then.
         verbose (bool): If True, methods may emit progress messages.
     """
@@ -82,7 +94,15 @@ class BaseData:
         )
         self.normalize_excel_dir = os.path.join(self.normalize_dir, "excel")
         self.normalize_json_dir = os.path.join(self.normalize_dir, "json")
-        self.normalize_path: str | None = None
+
+        normalize_filename = f"{year}-{slugify(Path(filepath).stem)}"
+        self.normalize_excel_filepath = os.path.join(
+            self.normalize_excel_dir, f"{normalize_filename}.xlsx"
+        )
+        self.normalize_json_filepath = os.path.join(
+            self.normalize_json_dir, f"{normalize_filename}.json"
+        )
+
         self.report: dict = {}
         self.verbose = verbose
         self.sheet_name = self.find_sheet(filepath)
@@ -91,6 +111,7 @@ class BaseData:
         # Same normalization as get_sheet_columns, which find_sheet relies on.
         df.columns = [str(c).strip() for c in df.columns]
         self.df: pd.DataFrame = df
+        self.normalized: bool = False
         self._coerce_numeric()
 
     def _coerce_numeric(self) -> None:

@@ -97,10 +97,6 @@ class CIPS(BaseData):
         "Off Voltage (V)": "Off Voltage",
     }
 
-    # Years whose exports ``fix`` leaves as they are; ``check`` still reports
-    # on them.
-    SKIP_FIX_YEARS: tuple[int, ...] = (2021,)
-
     def __init__(
         self,
         filepath: str,
@@ -124,6 +120,7 @@ class CIPS(BaseData):
         super().__init__(filepath, year, output_dir, verbose)
         self.protection: Literal["ICCP", "SACP"] = "ICCP"
         self.fixed: bool = False
+        self.cleaned: bool = False
 
     @classmethod
     def data_sheets(cls, sheet_columns: dict[str, list[str]]) -> list[str]:
@@ -197,8 +194,8 @@ class CIPS(BaseData):
           left untouched.
         - Adds an empty ``Comment`` column when there is none.
 
-        Files from ``SKIP_FIX_YEARS`` (2021) are left as they are. Never raises;
-        use ``check`` to see what is still missing. Running it twice is a no-op.
+        Never raises; use ``check`` to see what is still missing. Running it
+        twice is a no-op.
 
         Returns:
             Self: ``self``, to allow method chaining.
@@ -208,12 +205,6 @@ class CIPS(BaseData):
             Index(['Index', ..., 'Voltage', 'Off Voltage', ...], dtype='object')
         """
         if self.fixed:
-            return self
-        self.fixed = True
-
-        if self.year in self.SKIP_FIX_YEARS:
-            if self.verbose:
-                logger.info(f"Skipping fix for {self.year}: {self.filepath}")
             return self
 
         renames = {
@@ -234,6 +225,7 @@ class CIPS(BaseData):
             )
 
         self.df = df
+        self.fixed = True
 
         return self
 
@@ -282,6 +274,7 @@ class CIPS(BaseData):
         ``BaseData.clean`` drops all-empty rows, rows whose ``Latitude`` or
         ``Longitude`` is ``0`` or empty, rows with an empty ``Voltage``, and
         duplicate (``Latitude``, ``Longitude``) rows (first reading kept).
+        Sets ``self.cleaned`` once every step succeeded.
 
         Returns:
             Self: ``self``, to allow method chaining.
@@ -294,41 +287,58 @@ class CIPS(BaseData):
         self._fix_voltage()
         if self.protection == "ICCP":
             self.df = self.df.dropna(subset=self.ICCP_COLUMNS)
-        return super().clean()
+        super().clean()
+        self.cleaned = True
+
+        return self
 
     def normalize(self) -> Self:
-        """Add distances and protection condition, then rename to snake_case.
+        """Add distances and protection condition, then save Excel and JSON.
 
-        Adds:
+        Adds to ``self.df``:
 
-        - ``distance``: meters from the previous reading (``0`` for the first).
-        - ``real_distance``: running total from the first reading, in meters.
-        - ``condition``: protection level of each reading, from ``Off Voltage``
+        - ``Distance``: meters from the previous reading (``0`` for the first).
+        - ``Real Distance``: running total from the first reading, in meters.
+        - ``Condition``: protection level of each reading, from ``Off Voltage``
           for ICCP or ``Voltage`` for SACP (in volts):
 
           - ``PROTECTED``: ``-1.2 < V <= -0.85``
           - ``OVER PROTECTED``: ``V <= -1.2``
           - ``UNPROTECTED``: anything else, including an empty reading.
 
-        Then renames the columns to snake_case: ``latitude``, ``longitude``,
-        ``voltage``, ``on_voltage``, ``off_voltage``, ``protection``,
-        ``comment`` and ``dcp_feature_dcvg_anomaly``. Other columns keep their
-        names.
+        Then writes two files and sets ``self.normalized``:
+
+        - ``normalize_excel_filepath``
+          (``<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx``): ``self.df``
+          with its original column names, without the index.
+        - ``normalize_json_filepath``
+          (``<output_dir>/normalize/cips/json/<year>-<slug>.json``): one record
+          per row, with snake_case names: ``latitude``, ``longitude``,
+          ``voltage``, ``on_voltage``, ``off_voltage``, ``protection``,
+          ``distance``, ``real_distance``, ``condition``, ``comment`` and
+          ``dcp_feature_dcvg_anomaly``. Other columns keep their names.
 
         Rows are taken in their current order. The index is not used, so the
-        gaps ``clean`` leaves in it are fine. Call once, after ``clean``:
-        ``clean`` sets ``protection`` and makes sure every coordinate is
-        present and deduplicated. Because of the renaming, ``check``,
-        ``clean`` and ``normalize`` cannot run again afterwards.
+        gaps ``clean`` leaves in it are fine. Call after ``clean``, which sets
+        ``protection`` and makes sure every coordinate is present and
+        deduplicated.
 
         Returns:
             Self: ``self``, to allow method chaining.
 
+        Raises:
+            RuntimeError: If ``clean`` has not completed yet. ``fix`` alone is
+                not enough: ``_fix_voltage`` (run by ``clean``) sets
+                ``protection`` and the voltage columns ``normalize`` reads.
+
         Example:
             >>> cips = CIPS("segment.xlsx", year=2024).clean().normalize()
-            >>> cips.df["real_distance"].iloc[-1]  # survey length in meters
-            >>> cips.df["condition"].value_counts()
+            >>> cips.df["Real Distance"].iloc[-1]  # survey length in meters
+            >>> cips.normalize_json_filepath
+            'output/normalize/cips/json/2024-segment.json'
         """
+        if not self.cleaned:
+            raise RuntimeError(f"Run clean() before normalize(): {self.filepath}")
 
         def _condition(voltage: float) -> str:
             if -1.2 < voltage <= -0.85:
@@ -349,6 +359,12 @@ class CIPS(BaseData):
         voltage_column = "Voltage" if self.protection == "SACP" else "Off Voltage"
         df["Condition"] = df[voltage_column].apply(lambda x: _condition(x))
 
+        # Save to excel with original column name
+        os.makedirs(self.normalize_excel_dir, exist_ok=True)
+        df.to_excel(self.normalize_excel_filepath, index=False)
+
+        self.df = df
+
         columns_mapping = {
             "Voltage": "voltage",
             "Off Voltage": "off_voltage",
@@ -363,9 +379,12 @@ class CIPS(BaseData):
             "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
         }
 
+        # Save to JSON with modified column name
         df = df.rename(columns=columns_mapping)
+        os.makedirs(self.normalize_json_dir, exist_ok=True)
+        df.to_json(self.normalize_json_filepath, orient="records")
 
-        self.df = df
+        self.normalized = True
 
         return self
 

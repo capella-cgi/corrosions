@@ -7,10 +7,13 @@
 ```bash
 uv run main.py                  # check both; writes output/checked-cips.xlsx and output/checked-pcm.xlsx
 uv run main.py --type cips      # CIPS only
-uv run main.py --help           # index path, source dir, output dir, workers
+uv run main.py --skip-years     # process every year (default skips 2021)
+uv run main.py -y 2021 2022     # skip 2021 and 2022
+uv run main.py --help           # index path, source dir, skip years, output dir, workers
 ```
 
-Loads `IDDA - File List.xlsx`, copies the referenced files from the source
+Loads `IDDA - File List.xlsx` without the `--skip-years` rows (default
+`2021`), copies the referenced files from the source
 tree (default `D:\Data\Data IDDA`) into `output/raw_data`, then writes one
 report per data type:
 

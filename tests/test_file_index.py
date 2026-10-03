@@ -70,7 +70,7 @@ def test_check_cips_file(tmp_path, monkeypatch):
     no_alt = _cips_data()
     del no_alt["Altitude"]
     _write_sheets(data_dir / "2024" / "CIPS" / "noalt.xlsx", {"Data": no_alt})
-    # 2021 -mV export: left as is, no ICCP/SACP column -> invalid, flagged
+    # 2021 -mV export: no ICCP/SACP column -> invalid, flagged
     mv = _cips_data(**{"-mV On": [1100, 1200], "-mV Off": [900, 1000]})
     del mv["On Voltage"], mv["Off Voltage"]
     _write_sheets(data_dir / "2021" / "CIPS" / "mv.xlsx", {"Data": mv})
@@ -131,3 +131,64 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert "No CIPS data sheet" in report.loc["nodata.xlsx", "reason"]
 
     assert report.loc["missing.xlsx", "reason"] == "file not found on disk"
+
+    # skip_years leaves those years out of the report entirely
+    skipped = FileIndex(str(index_path), skip_years=[2021, 2022]).check_cips_file(
+        str(data_dir)
+    )
+    assert set(skipped["year"]) == {2024}
+    assert len(skipped) == 4
+
+
+def test_skip_years_applies_to_every_data_type(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    index_path = tmp_path / "index.xlsx"
+    pd.DataFrame(
+        {
+            "Year": [2021, 2024],
+            "Area": ["A", "A"],
+            "Segment": ["S", "S"],
+            "Sub Segment": ["SS", "SS"],
+            "Diameter": [4.0, 4.0],
+            "Length": [1.0, 1.0],
+            "Province Code": [31, 31],
+            "ACVG/DCVG": [None, None],
+            "CIPS": ["c-2021.xlsx", "c-2024.xlsx"],
+            "PCM": ["p-2021.xlsx", "p-2024.xlsx"],
+        }
+    ).to_excel(index_path, index=False)
+
+    index = FileIndex(str(index_path), skip_years=[2021])
+    assert index.skip_years == [2021]
+    assert index.df["Year"].tolist() == [2024]
+    assert list(index.df.index) == [0]
+    assert index.by_year(2021).empty
+
+    # neither file exists, so each report has only the 2024 row
+    data_dir = str(tmp_path / "data")
+    assert index.check_pcm_file(data_dir)["year"].tolist() == [2024]
+    assert index.check_cips_file(data_dir)["year"].tolist() == [2024]
+
+    index.check_existing_file(data_dir)
+    assert index.df["Year"].tolist() == [2024]
+
+
+def test_rebuild_fixes_filenames_before_checking_existence(tmp_path):
+    # the index lists "seg" without .xlsx; the file on disk is "seg.xlsx"
+    source = tmp_path / "source"
+    os.makedirs(source / "2024" / "CIPS FINAL")
+    pd.DataFrame({"Latitude": [-6.1]}).to_excel(
+        source / "2024" / "CIPS FINAL" / "seg.xlsx", index=False
+    )
+    index_path = tmp_path / "index.xlsx"
+    _write_index(index_path, [(2024, "seg")])
+
+    out = tmp_path / "out"
+    index = FileIndex(str(index_path)).rebuild(
+        source_dir=str(source), output_dir=str(out)
+    )
+
+    assert index.fixed
+    assert index.df.loc[0, "CIPS"] == "seg.xlsx"
+    assert index.df.loc[0, "CIPS File Exists"]
+    assert os.path.isfile(out / "raw_data" / "2024" / "CIPS" / "seg.xlsx")

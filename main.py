@@ -1,12 +1,15 @@
 """Check CIPS and PCM survey files listed in the master file index.
 
-Mirrors ``file-index.ipynb``: load the index, fix filenames, check which files
-exist, copy them into ``<output_dir>/raw_data``, then write one report per
-data type to ``<output_dir>/checked-cips.xlsx`` / ``checked-pcm.xlsx``.
+Mirrors ``file-index.ipynb``: load the index (leaving out ``--skip-years``),
+fix filenames, copy the existing files into ``<output_dir>/raw_data``, then
+write one report per data type to ``<output_dir>/checked-cips.xlsx`` /
+``checked-pcm.xlsx``.
 
 Example:
-    uv run main.py                     # check both CIPS and PCM
+    uv run main.py                     # check both CIPS and PCM, skip 2021
     uv run main.py --type cips         # CIPS check + clean only
+    uv run main.py --skip-years        # process every year
+    uv run main.py -y 2021 2022        # skip 2021 and 2022
 """
 
 import os
@@ -41,6 +44,15 @@ def arguments() -> argparse.Namespace:
         nargs="*",
         default=["Nomor Segment"],
         help="Index columns to drop after loading (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-y",
+        "--skip-years",
+        nargs="*",
+        type=int,
+        default=[2021],
+        help="Survey years to leave out; pass no value to process every year "
+        "(default: %(default)s)",
     )
     parser.add_argument(
         "-t",
@@ -80,8 +92,13 @@ def main() -> None:
     output_dir = resolve_output_dir(args.output_dir)
     data_dir = os.path.join(output_dir, "raw_data")
 
-    fi = FileIndex(filepath=args.index, drop_columns=args.drop_columns, verbose=True)
-    fi.fix().check_existing_file(data_dir=args.source_dir)
+    fi = FileIndex(
+        filepath=args.index,
+        drop_columns=args.drop_columns,
+        skip_years=args.skip_years,
+        verbose=True,
+    )
+    # rebuild() checks which files exist and runs fix() itself
     fi.rebuild(source_dir=args.source_dir, output_dir=output_dir)
 
     if args.type in ("all", "cips"):
@@ -89,7 +106,7 @@ def main() -> None:
         save_report(checked, os.path.join(output_dir, "checked-cips.xlsx"))
 
     if args.type in ("all", "pcm"):
-        checked = fi.check_pcm_quality(data_dir=data_dir, n_jobs=args.n_jobs)
+        checked = fi.check_pcm_file(data_dir=data_dir, n_jobs=args.n_jobs)
         save_report(checked, os.path.join(output_dir, "checked-pcm.xlsx"))
 
 

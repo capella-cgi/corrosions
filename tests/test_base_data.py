@@ -238,12 +238,12 @@ def test_cips_fix_renames_and_adds_comment(tmp_path):
     assert cips.check().report["is_valid"] is True
 
 
-def test_cips_fix_skips_2021(tmp_path):
-    data = {**_cips_2022(), "-mV On": [1, 2, 3]}
-    path = _write_excel(tmp_path / "CIPS - ICCP 2021.xlsx", data)
+def test_cips_fix_runs_for_every_year(tmp_path):
+    path = _write_excel(tmp_path / "CIPS - ICCP 2021.xlsx", _cips_2022())
     cips = CIPS(path, year=2021, output_dir=str(tmp_path / "out")).fix()
-    assert "Index" in cips.df.columns
-    assert "Comment" not in cips.df.columns
+    assert cips.fixed is True
+    assert "Voltage" in cips.df.columns
+    assert (cips.df["Comment"] == "").all()
 
 
 def test_cips_check_flags_missing_voltage(tmp_path):
@@ -357,8 +357,8 @@ def test_cips_normalize_distances(tmp_path):
     )
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
     assert cips.normalize() is cips
-    assert cips.df["distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
-    assert cips.df["real_distance"].tolist() == pytest.approx(
+    assert cips.df["Distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
+    assert cips.df["Real Distance"].tolist() == pytest.approx(
         [0.0, 111.195, 222.390], abs=1e-3
     )
 
@@ -374,18 +374,36 @@ def test_cips_normalize_after_clean_leaves_index_gaps(tmp_path):
 
     cips.normalize()
     assert list(cips.df.index) == [1, 3, 4]
-    assert cips.df["distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
-    assert cips.df["real_distance"].iloc[-1] == pytest.approx(222.390, abs=1e-3)
+    assert cips.df["Distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
+    assert cips.df["Real Distance"].iloc[-1] == pytest.approx(222.390, abs=1e-3)
 
 
-def test_cips_normalize_renames_columns(tmp_path):
+def test_cips_normalize_saves_excel_and_json(tmp_path):
     data = {**_cips_track([-6.1, -6.101])}
     del data["Voltage"]
     data["On Voltage"] = [-1.0, -1.0]
     data["Off Voltage"] = [-0.9, -0.9]
     path = _write_excel(tmp_path / "CIPS - ICCP cols.xlsx", data)
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
-    assert set(cips.df.columns) == {
+    out = tmp_path / "out"
+    cips = CIPS(path, year=2024, output_dir=str(out)).clean().normalize()
+    assert cips.normalized is True
+
+    # Excel: original column names, no index column
+    assert cips.normalize_excel_filepath == str(
+        out / "normalize" / "cips" / "excel" / "2024-cips-iccp-cols.xlsx"
+    )
+    excel = pd.read_excel(cips.normalize_excel_filepath)
+    assert list(excel.columns) == list(cips.df.columns)
+    assert "Unnamed: 0" not in excel.columns
+    assert {"Distance", "Real Distance", "Condition"} <= set(excel.columns)
+
+    # JSON: one record per row, snake_case column names
+    assert cips.normalize_json_filepath == str(
+        out / "normalize" / "cips" / "json" / "2024-cips-iccp-cols.json"
+    )
+    records = pd.read_json(cips.normalize_json_filepath, orient="records")
+    assert len(records) == 2
+    assert set(records.columns) == {
         "latitude",
         "longitude",
         "voltage",
@@ -400,12 +418,37 @@ def test_cips_normalize_renames_columns(tmp_path):
     }
 
 
+def test_cips_normalize_before_clean_raises(tmp_path):
+    path = _write_excel(tmp_path / "CIPS - SACP raw.xlsx", _cips_track([-6.1, -6.101]))
+    with pytest.raises(RuntimeError, match="Run clean"):
+        CIPS(path, year=2024, output_dir=str(tmp_path / "out")).normalize()
+
+
+def test_cips_normalize_after_fix_only_raises(tmp_path):
+    # fix() alone does not run _fix_voltage, so a SACP file has no Off Voltage
+    path = _write_excel(tmp_path / "CIPS - SACP fixed.xlsx", _cips_track([-6.1, -6.101]))
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix()
+    assert cips.cleaned is False
+    with pytest.raises(RuntimeError, match="Run clean"):
+        cips.normalize()
+
+
+def test_cips_failed_clean_leaves_cleaned_false(tmp_path):
+    path = _write_excel(tmp_path / "segment.xlsx", _cips_2022())
+    cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out"))
+    with pytest.raises(ValueError, match="Cannot tell ICCP from SACP"):
+        cips.clean()
+    assert cips.cleaned is False
+    with pytest.raises(RuntimeError, match="Run clean"):
+        cips.normalize()
+
+
 def test_cips_normalize_condition_sacp_uses_voltage(tmp_path):
     data = _cips_track([-6.1, -6.101, -6.102, -6.103, -6.104])
     data["Voltage"] = [-0.80, -0.85, -1.0, -1.2, -1.5]
     path = _write_excel(tmp_path / "CIPS - SACP cond.xlsx", data)
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
-    assert cips.df["condition"].tolist() == [
+    assert cips.df["Condition"].tolist() == [
         "UNPROTECTED",
         "PROTECTED",
         "PROTECTED",
@@ -423,7 +466,7 @@ def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
     path = _write_excel(tmp_path / "CIPS - ICCP cond.xlsx", data)
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().normalize()
     assert cips.df["protection"].tolist() == ["ICCP"] * 3
-    assert cips.df["condition"].tolist() == [
+    assert cips.df["Condition"].tolist() == [
         "UNPROTECTED",
         "PROTECTED",
         "OVER PROTECTED",
@@ -474,7 +517,7 @@ def test_cips_iccp_sign_ignores_leading_empty_readings(tmp_path):
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
     assert cips.df["Voltage"].tolist() == [-1.0, -1.0]
     assert cips.df["Off Voltage"].tolist() == [-0.9, -1.3]
-    assert cips.normalize().df["condition"].tolist() == ["PROTECTED", "OVER PROTECTED"]
+    assert cips.normalize().df["Condition"].tolist() == ["PROTECTED", "OVER PROTECTED"]
 
 
 def test_cips_sacp_sign_ignores_leading_empty_readings(tmp_path):
@@ -483,3 +526,14 @@ def test_cips_sacp_sign_ignores_leading_empty_readings(tmp_path):
     path = _write_excel(tmp_path / "CIPS - SACP leading nan.xlsx", data)
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
     assert cips.df["Voltage"].tolist() == [-0.9, -1.0]
+
+
+def test_normalize_filename_drops_extension(tmp_path):
+    path = _write_excel(
+        tmp_path / "CIPS - SACP Segmen BKS 10 inch (A - B 4.9 km).xlsx",
+        _cips_track([-6.1, -6.101]),
+    )
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out"))
+    stem = "2024-cips-sacp-segmen-bks-10-inch-a-b-4-9-km"
+    assert os.path.basename(cips.normalize_excel_filepath) == f"{stem}.xlsx"
+    assert os.path.basename(cips.normalize_json_filepath) == f"{stem}.json"

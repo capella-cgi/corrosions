@@ -123,15 +123,23 @@ the referenced files.
 | `df` | `pd.DataFrame` | Working DataFrame derived from the source Excel. |
 | `checked` | `bool` | `True` after `check_existing_file()` has been run. |
 | `fixed` | `bool` | `True` after `fix()` has been run. |
+| `skip_years` | `list[int]` | Survey years removed from `df` at load time (sorted, deduplicated). |
 | `verbose` | `bool` | If `True`, `fix()` emits progress messages. |
 
-#### `__init__(filepath, drop_columns=None, verbose=False)`
+#### `__init__(filepath, drop_columns=None, skip_years=None, verbose=False)`
 
-Load the Excel file, optionally drop columns, validate schema, and coerce
-`Year`, `Diameter`, `Length`, and `Province Code` to their expected dtypes.
+Load the Excel file, optionally drop columns, validate schema, coerce
+`Year`, `Diameter`, `Length`, and `Province Code` to their expected dtypes,
+then remove the rows of `skip_years`.
 
 - **`filepath`** *(str)* — path to the source Excel file.
 - **`drop_columns`** *(str | list[str] | None)* — columns to drop after load.
+- **`skip_years`** *(list[int] | None)* — survey years to leave out, e.g.
+  `[2021]` for exports the CIPS/PCM loaders cannot read. Their rows are
+  removed from `df` right after loading (index reset), so every method
+  ignores them, for both CIPS and PCM: `check_existing_file`, `rebuild`,
+  `check_pcm_file`, `check_cips_file`, `by_year`, `save`, … Defaults to
+  `None` (no year skipped).
 - **`verbose`** *(bool)* — enable progress logging inside `fix()`.
 - **Raises** `FileNotFoundError` if the file does not exist; `KeyError` if a
   required column is missing after `drop_columns` is applied.
@@ -167,14 +175,15 @@ Return a copy of `df` filtered to `Year == value`.
 Return a copy of `df` restricted to the given columns. Accepts a single
 column name or a list. Raises `KeyError` on unknown column names.
 
-#### `rebuild(source_dir, output_dir=None, destination_dir="data") -> Self`
+#### `rebuild(source_dir, output_dir=None, destination_dir="raw_data") -> Self`
 
 Copy every referenced file from `source_dir` into a clean output tree.
 
 Behavior:
 
-1. Runs `check_existing_file(source_dir)`.
-2. Runs `fix()` if not already applied.
+1. Runs `fix()` if not already applied, so filenames get their `.xlsx`
+   suffix before they are looked up on disk.
+2. Runs `check_existing_file(source_dir)`.
 3. Resolves `output_dir` (defaults to `<cwd>/output`).
 4. For each existing referenced file, copies it (via `shutil.copy2`) to
    `<output_dir>/<destination_dir>/<Year>/<data_type>/<filename>`. Existing
@@ -184,7 +193,7 @@ Behavior:
 
 Returns `self` for chaining.
 
-#### `check_pcm_quality(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
+#### `check_pcm_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
 Run `PCM(...).clean().save().check()` on every referenced PCM file, in
 parallel via joblib's `loky` backend when `n_jobs > 1` (or `-1` for all
@@ -208,7 +217,7 @@ Returns a DataFrame with one row per index entry and columns:
 
 Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
 file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
-backend like `check_pcm_quality`. The data sheet is located, column names
+backend like `check_pcm_file`. The data sheet is located, column names
 are aligned, then checked. Then `clean().save()` writes a cleaned copy to
 `<cwd>/output/cleaned/<year>/CIPS/`. The two steps are separate, so a file
 that fails to clean still reports its column checks. Check columns describe
@@ -239,7 +248,7 @@ from corrosions.data.file_index import FileIndex
 
 index = FileIndex("IDDA - File List.xlsx", verbose=True)
 index.rebuild(source_dir="//nas/surveys", destination_dir="data")
-report = index.check_pcm_quality("output/data", n_jobs=-1)
+report = index.check_pcm_file("output/data", n_jobs=-1)
 cips_report = index.check_cips_file("output/raw_data", n_jobs=-1)
 ```
 
@@ -265,7 +274,7 @@ before `clean()` to check the raw data and after to check the cleaned data.
 
 | Attribute | Type | Purpose |
 | --- | --- | --- |
-| `KIND` | `Literal["pcm", "cips"]` | Survey type; names the cleaned output sub-directory (upper-cased). |
+| `KIND` | `Literal["pcm", "cips"]` | Survey type; names the cleaned output sub-directory (upper-cased) and the normalize one (lower-cased). |
 | `REQUIRED_COLUMNS` | `list[str]` | Columns expected in the source Excel, checked by `check()`. |
 | `NUMERIC_COLUMNS` | `list[str]` | Columns coerced with `pd.to_numeric(..., errors="coerce")` at load time. |
 | `CLEAN_REQUIRED_COLUMNS` | `list[str]` | Columns whose non-NaN value is required for a row to survive `clean()`. |
@@ -282,6 +291,12 @@ before `clean()` to check the raw data and after to check the cleaned data.
 | `output_dir` | `str` | Resolved output directory. |
 | `cleaned_dir` | `str` | `<output_dir>/cleaned/<year>/<KIND>`. |
 | `cleaned_path` | `str \| None` | Path of the saved Excel once `save()` ran. |
+| `normalize_dir` | `str` | `<output_dir>/normalize/<kind>`. |
+| `normalize_excel_dir` | `str` | `<normalize_dir>/excel`. |
+| `normalize_json_dir` | `str` | `<normalize_dir>/json`. |
+| `normalize_excel_filepath` | `str` | Excel written by a subclass `normalize()`: `<normalize_excel_dir>/<year>-<slug>.xlsx` (`<slug>` = slugified source filename without its extension). |
+| `normalize_json_filepath` | `str` | JSON written by a subclass `normalize()`: `<normalize_json_dir>/<year>-<slug>.json`. |
+| `normalized` | `bool` | `True` once a subclass `normalize()` wrote both files. Stays `False` for subclasses without `normalize()` (`PCM`). |
 | `report` | `dict` | Summary from the last `check()` call; empty until then. |
 | `verbose` | `bool` | If `True`, methods may emit progress messages. |
 
@@ -397,10 +412,10 @@ cips.protection           # "ICCP" or "SACP"
 | `SHEET_COLUMNS` | `Latitude`, `Longitude`, `DCP/Feature/DCVG Anomaly`: header that marks a sheet as CIPS data (a subset of `REQUIRED_COLUMNS`) |
 | `SHEET_POSSIBILITIES` | `Data`, `Sheet1`, `Sequential File`, `Sequential Files`: preferred names when several sheets qualify |
 | `RENAME_COLUMNS` | `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage` |
-| `SKIP_FIX_YEARS` | `(2021,)`: years `fix()` leaves as they are |
 
 Extra instance attributes: `protection` (`"ICCP"` or `"SACP"`, set by
-`clean()`) and `fixed` (`True` once `fix()` ran).
+`clean()`), `fixed` (`True` once `fix()` ran) and `cleaned` (`True` once
+`clean()` completed; `normalize()` requires it).
 
 #### `data_sheets(sheet_columns: dict[str, list[str]]) -> list[str]` *(classmethod)*
 
@@ -426,8 +441,9 @@ Align column names across export formats:
   are left untouched.
 - Add an empty `Comment` column when there is none.
 
-Files from `SKIP_FIX_YEARS` (2021) are left as they are. Never raises, and
-running it twice is a no-op.
+Never raises, and running it twice is a no-op. To leave out a year whose
+exports `fix()` cannot align (such as 2021 `-mV` exports), pass
+`skip_years` to the [`FileIndex`](#class-fileindex) constructor.
 
 #### `check() -> Self`
 
@@ -469,31 +485,36 @@ Call `fix()` first to check the data as `clean()` will see it.
 
 #### `normalize() -> Self`
 
-Add distances and a protection condition, then rename the columns to
-snake_case. Distances are computed with
+Add distances and a protection condition to `df`, then save it as Excel
+and JSON. Distances are computed with
 [`calculate_distance`](#corrosionsutilsgeo_utils) on whole columns.
 
 | Added column | Description |
 | --- | --- |
-| `distance` | Meters from the previous reading (`0` for the first). |
-| `real_distance` | Running total from the first reading, in meters. |
-| `condition` | `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`) or `UNPROTECTED` (anything else, including an empty reading). `V` is `Off Voltage` for ICCP and `Voltage` for SACP, in volts. |
+| `Distance` | Meters from the previous reading (`0` for the first). |
+| `Real Distance` | Running total from the first reading, in meters. |
+| `Condition` | `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`) or `UNPROTECTED` (anything else, including an empty reading). `V` is `Off Voltage` for ICCP and `Voltage` for SACP, in volts. |
 
-Renamed columns: `Latitude` → `latitude`, `Longitude` → `longitude`,
-`Voltage` → `voltage`, `On Voltage` → `on_voltage`, `Off Voltage` →
-`off_voltage`, `Comment` → `comment`, `DCP/Feature/DCVG Anomaly` →
-`dcp_feature_dcvg_anomaly`. `protection` already has its final name. Other
-columns keep their names.
+| File | Content |
+| --- | --- |
+| `normalize_excel_filepath` = `<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
+| `normalize_json_filepath` = `<output_dir>/normalize/cips/json/<year>-<slug>.json` | One record per row, with snake_case names: `latitude`, `longitude`, `voltage`, `on_voltage`, `off_voltage`, `protection`, `distance`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly`. Other columns keep their names. |
+
+`<slug>` is the slugified source filename without its extension. `df` keeps
+the original column names, and `normalized` is set to `True` once both files
+are written.
 
 Rows are taken in their current order. The index is not used, so the gaps
-`clean()` leaves in it are fine. Call it once, after `clean()`, which sets
+`clean()` leaves in it are fine. Call it after `clean()`, which sets
 `protection` and makes sure every coordinate is present and deduplicated.
-After the renaming, `check()`, `clean()` and `normalize()` cannot run again.
+Raises `RuntimeError` if `clean()` has not completed. `fix()` alone is not
+enough, because `clean()` is what sets `protection` and the voltage columns
+`normalize()` reads.
 
 ```python
 cips = CIPS("segment.xlsx", year=2024).clean().normalize()
-cips.df["real_distance"].iloc[-1]   # survey length in meters
-cips.df["condition"].value_counts()
+cips.df["Real Distance"].iloc[-1]   # survey length in meters
+cips.normalize_json_filepath        # "output/normalize/cips/json/2024-segment.json"
 ```
 
 ---

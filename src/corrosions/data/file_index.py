@@ -42,6 +42,7 @@ class FileIndex:
         df (pd.DataFrame): Working DataFrame derived from the source Excel.
         checked (bool): Whether ``check_existing_file()`` has been run.
         fixed (bool): Whether ``fix()`` has been run.
+        skip_years (list[int]): Survey years removed from ``df`` at load time.
         verbose (bool): If True, emit progress messages via the logger.
 
     Example:
@@ -69,6 +70,7 @@ class FileIndex:
         self,
         filepath: str,
         drop_columns: str | list[str] | None = None,
+        skip_years: list[int] | None = None,
         verbose: bool = False,
     ):
         """Load the Excel file and prepare the working DataFrame.
@@ -77,6 +79,12 @@ class FileIndex:
             filepath (str): Path to the source Excel file.
             drop_columns (str | list[str] | None): Column name or list of column
                 names to drop after loading. Defaults to ``None``.
+            skip_years (list[int] | None): Survey years to leave out, e.g.
+                ``[2021]`` for exports the CIPS/PCM loaders cannot read. Their
+                rows are removed from ``df`` right after loading, so every
+                method (``check_existing_file``, ``rebuild``,
+                ``check_pcm_file``, ``check_cips_file``, ``save``, ...)
+                ignores them. Defaults to ``None`` (no year skipped).
             verbose (bool): If True, emit progress messages during ``fix()``.
                 Defaults to ``False``.
 
@@ -87,6 +95,7 @@ class FileIndex:
 
         Example:
             >>> index = FileIndex("IDDA - File List.xlsx", drop_columns="Notes")
+            >>> index = FileIndex("IDDA - File List.xlsx", skip_years=[2021])
         """
         self.filepath = filepath
 
@@ -112,6 +121,15 @@ class FileIndex:
         self.df["Diameter"] = self.df["Diameter"].astype(float)
         self.df["Length"] = self.df["Length"].astype(float)
         self.df["Province Code"] = self.df["Province Code"].astype(int)
+
+        self.skip_years: list[int] = sorted(set(skip_years or []))
+        if self.skip_years:
+            skipped = self.df["Year"].isin(self.skip_years)
+            self.df = self.df[~skipped].reset_index(drop=True)
+            if self.verbose:
+                logger.info(
+                    f"Skipped {int(skipped.sum())} rows from years {self.skip_years}"
+                )
 
     def validate(self) -> None:
         """Ensure that all required columns are present in ``df``.
@@ -251,9 +269,10 @@ class FileIndex:
     ) -> Self:
         """Copy referenced files from ``source_dir`` into a clean output tree.
 
-        Rechecks file existence against ``source_dir``, applies ``fix()`` if not
-        already applied, then copies every existing referenced file into
-        ``<output_dir>/<destination_dir>/<Year>/<data_type>/``.
+        Applies ``fix()`` if not already applied, so filenames get their
+        ``.xlsx`` suffix before they are looked up, then rechecks file
+        existence against ``source_dir`` and copies every existing referenced
+        file into ``<output_dir>/<destination_dir>/<Year>/<data_type>/``.
         Existing destination files are skipped.
 
         Args:
@@ -268,10 +287,10 @@ class FileIndex:
         Example:
             >>> index.rebuild(source_dir="//nas/surveys", destination_dir="raw_data")
         """
-        self.check_existing_file(source_dir)
-
         if not self.fixed:
             self.fix()
+
+        self.check_existing_file(source_dir)
 
         output_dir = resolve_output_dir(output_dir)
         destination_dir = os.path.join(output_dir, destination_dir)
@@ -316,7 +335,7 @@ class FileIndex:
 
         return self
 
-    def check_pcm_quality(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
+    def check_pcm_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Run PCM data-quality checks on every referenced PCM file.
 
         Each file runs through ``PCM(...).clean().save().check()``, so the
@@ -383,6 +402,7 @@ class FileIndex:
             "duplicates",
             "reason",
         ]
+
         return pd.DataFrame(results, columns=columns)
 
     def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
@@ -473,6 +493,7 @@ class FileIndex:
                 return result
 
             result["cleaned_path"] = cips.cleaned_path
+            cips.normalize()
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
