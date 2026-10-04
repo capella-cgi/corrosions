@@ -156,10 +156,14 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert pd.isna(index.df.loc[6, "normalized_cips_file"])  # missing.xlsx
     assert pd.isna(index.df.loc[7, "cips_protection"])  # no CIPS filename
 
-    records = json.loads(open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read())
-    assert records[0]["cips_protection"] == "ICCP"
-    assert records[0]["normalized_cips_file"] == "2024-good.json"
-    assert records[2]["normalized_cips_file"] is None
+    # no PCM files in this index: every row lacks normalized_pcm_file
+    records, excluded = _read_index_json(index.to_json(str(tmp_path / "out")))
+    assert records == []
+    assert excluded[0]["cips_protection"] == "ICCP"
+    assert excluded[0]["normalized_cips_file"] == "2024-good.json"
+    assert excluded[0]["missing"] == ["normalized_pcm_file"]
+    assert excluded[2]["cips_file"] == "unknown.xlsx"
+    assert excluded[2]["missing"] == ["normalized_cips_file", "normalized_pcm_file"]
 
     # skip_years leaves those years out of the report entirely
     skipped = FileIndex(str(index_path), skip_years=[2021, 2022]).check_cips_file(
@@ -249,30 +253,51 @@ def test_rebuild_fixes_filenames_before_checking_existence(tmp_path):
     assert os.path.isfile(out / "raw_data" / "2024" / "CIPS" / "seg.xlsx")
 
 
+def _read_index_json(path: str) -> tuple[list, list]:
+    """Return the records of file_index.json and of the excluded file."""
+    with open(path, encoding="utf-8") as f:
+        records = json.load(f)
+    excluded_path = os.path.join(
+        os.path.dirname(path), FileIndex.EXCLUDED_JSON_FILENAME
+    )
+    with open(excluded_path, encoding="utf-8") as f:
+        excluded = json.load(f)
+    return records, excluded
+
+
 def test_to_json(tmp_path):
     index_path = tmp_path / "index.xlsx"
     pd.DataFrame(
         {
-            "Year": [2025, 2025],
-            "Area": ["Jakarta", "Jakarta"],
-            "Segment": [None, "RE Martadinata"],
-            "Sub Segment": ["Pipa Servis Indonesia Power", "Sub"],
-            "Diameter": [16, 10.5],
-            "Length": [1.75, 2.0],
-            "Province Code": [31, 31],
-            "ACVG/DCVG": [None, None],
-            "CIPS": ["CIPS - SACP 01.xlsx", None],
-            "PCM": [None, None],
+            "Year": [2025, 2025, 2025, 2025],
+            "Area": ["Jakarta"] * 4,
+            "Segment": [None, "RE Martadinata", "Third", "Fourth"],
+            "Sub Segment": ["Pipa Servis Indonesia Power", "Sub", "Sub", "Sub"],
+            "Diameter": [16, 10.5, 8, 8],
+            "Length": [1.75, 2.0, 1.0, 1.0],
+            "Province Code": [31] * 4,
+            "ACVG/DCVG": [None] * 4,
+            "CIPS": ["CIPS - SACP 01.xlsx", "CIPS 02.xlsx", "CIPS 03.xlsx", None],
+            "PCM": ["PCM 01.xlsx", "PCM 02.xlsx", None, None],
         }
     ).to_excel(index_path, index=False)
 
+    index = FileIndex(str(index_path))
     out = tmp_path / "out"
-    path = FileIndex(str(index_path)).to_json(str(out))
+
+    # before check_cips_file / check_pcm_file every row is excluded
+    path = index.to_json(str(out))
     assert path == os.path.join(str(out), "file_index.json")
+    records, excluded = _read_index_json(path)
+    assert records == []
+    assert len(excluded) == 4
 
-    with open(path, encoding="utf-8") as f:
-        records = json.load(f)
+    # what the two checks would merge into df
+    index.df["cips_protection"] = ["SACP", "ICCP", "ICCP", None]
+    index.df["normalized_cips_file"] = ["c1.json", "c2.json", "c3.json", None]
+    index.df["normalized_pcm_file"] = ["p1.json", "p2.json", None, None]
 
+    records, excluded = _read_index_json(index.to_json(str(out)))
     assert records == [
         {
             "id": 0,
@@ -283,9 +308,9 @@ def test_to_json(tmp_path):
             "pipe_diameter": 16,
             "length": 1.75,
             "segment_code": "pipa-servis-indonesia-power-16",
-            "cips_protection": None,  # check_cips_file has not run
-            "normalized_cips_file": None,
-            "normalized_pcm_file": None,  # check_pcm_file has not run
+            "cips_protection": "SACP",
+            "normalized_cips_file": "c1.json",
+            "normalized_pcm_file": "p1.json",
         },
         {
             "id": 1,
@@ -296,15 +321,49 @@ def test_to_json(tmp_path):
             "pipe_diameter": 10.5,
             "length": 2.0,  # length stays a float even when whole
             "segment_code": "re-martadinata-10-5",
-            "cips_protection": None,
-            "normalized_cips_file": None,
-            "normalized_pcm_file": None,
+            "cips_protection": "ICCP",
+            "normalized_cips_file": "c2.json",
+            "normalized_pcm_file": "p2.json",
         },
     ]
     # == cannot tell 16 from 16.0, so check the JSON types explicitly
     assert type(records[0]["pipe_diameter"]) is int
     assert type(records[0]["year"]) is int
     assert type(records[1]["length"]) is float
+
+    # rows without both normalized files, no id, plus source files + missing
+    assert excluded == [
+        {
+            "year": 2025,
+            "area": "Jakarta",
+            "area_code": "jakarta-2025",
+            "segment": "Third",
+            "pipe_diameter": 8,
+            "length": 1.0,
+            "segment_code": "third-8",
+            "cips_protection": "ICCP",
+            "normalized_cips_file": "c3.json",
+            "normalized_pcm_file": None,
+            "cips_file": "CIPS 03.xlsx",
+            "pcm_file": None,
+            "missing": ["normalized_pcm_file"],
+        },
+        {
+            "year": 2025,
+            "area": "Jakarta",
+            "area_code": "jakarta-2025",
+            "segment": "Fourth",
+            "pipe_diameter": 8,
+            "length": 1.0,
+            "segment_code": "fourth-8",
+            "cips_protection": None,
+            "normalized_cips_file": None,
+            "normalized_pcm_file": None,
+            "cips_file": None,
+            "pcm_file": None,
+            "missing": ["normalized_cips_file", "normalized_pcm_file"],
+        },
+    ]
 
 
 def _write_value_index(path, rows: list[dict]) -> None:
@@ -475,5 +534,9 @@ def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
     records = json.loads(
         open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read()
     )
-    assert records[0]["normalized_pcm_file"] == "2025-pcm-01-good.json"
-    assert records[3]["normalized_pcm_file"] is None
+    assert records == []  # no CIPS files in this index
+    with open(tmp_path / "out" / "file_index_excluded.json", encoding="utf-8") as f:
+        excluded = json.load(f)
+    assert excluded[0]["normalized_pcm_file"] == "2025-pcm-01-good.json"
+    assert excluded[0]["missing"] == ["normalized_cips_file"]
+    assert excluded[3]["pcm_file"] is None

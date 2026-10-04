@@ -289,13 +289,27 @@ each result and merged into `df` by row afterwards.
 #### `to_json(output_dir: str | None = None) -> str`
 
 Write the index as JSON records to `<output_dir>/file_index.json`
-(`output_dir` defaults to `<cwd>/output`) and return the path. Runs `fix()`
-first if needed, so empty `Segment` values are filled from `Sub Segment`.
-Empty values are written as `null`.
+(`JSON_FILENAME`; `output_dir` defaults to `<cwd>/output`) and return the
+path. Runs `fix()` first if needed, so empty `Segment` values are filled from
+`Sub Segment`. Empty values are written as `null`.
+
+Only rows with **both** a `normalized_cips_file` and a `normalized_pcm_file`
+(`NORMALIZED_FILE_KEYS`) are written, so run `check_cips_file` and
+`check_pcm_file` first. Every other row goes to
+`<output_dir>/file_index_excluded.json` (`EXCLUDED_JSON_FILENAME`) with the
+same keys minus `id`, plus:
+
+| Extra key | Content |
+| --- | --- |
+| `cips_file`, `pcm_file` | Source filenames from the index (`CIPS` / `PCM`); `null` when the index has none. |
+| `missing` | The `NORMALIZED_FILE_KEYS` that are `null`, e.g. `["normalized_pcm_file"]`. |
+
+Why a file was not normalized is in the `check_cips_file` / `check_pcm_file`
+report (`reason`). Both files are always written, possibly as `[]`.
 
 | Key | Source |
 | --- | --- |
-| `id` | Row position, `0..n-1`. |
+| `id` | Position among the written records, `0..n-1`. |
 | `year`, `area` | `Year`, `Area`. |
 | `area_code` | Slug of `<area>-<year>`, e.g. `jakarta-2025`. |
 | `segment` | `Segment`. |
@@ -307,7 +321,8 @@ Empty values are written as `null`.
 
 ```python
 index.check_cips_file("output/raw_data", n_jobs=-1)
-index.to_json()   # "output/file_index.json"
+index.check_pcm_file("output/raw_data", n_jobs=-1)
+index.to_json()   # "output/file_index.json" (+ "output/file_index_excluded.json")
 ```
 
 #### `save(output_dir: str | None = None) -> None`

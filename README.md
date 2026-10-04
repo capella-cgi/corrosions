@@ -28,9 +28,13 @@ report per data type:
   cleaning (cleaned copies go to `output/cleaned/<year>/PCM/`). Each file
   is then normalized (current loss in `dbma`, `Current Loss Rate`,
   `Condition`) into `output/normalize/pcm/excel|json/`.
-- `file_index.json`: one record per index row (`year`, `area`, `area_code`,
-  `segment`, `pipe_diameter`, `length`, `segment_code`, `cips_protection`,
-  `normalized_cips_file`, `normalized_pcm_file`). CIPS files are also normalized into
+- `file_index.json`: one record per index row that has both a normalized
+  CIPS and a normalized PCM file (`year`, `area`, `area_code`, `segment`,
+  `pipe_diameter`, `length`, `segment_code`, `cips_protection`,
+  `normalized_cips_file`, `normalized_pcm_file`).
+- `file_index_excluded.json`: the other rows, with their source `cips_file`
+  / `pcm_file` and a `missing` list. With `--type cips` or `--type pcm`
+  every row lands here, because the other type is never normalized. CIPS files are also normalized into
   `output/normalize/cips/excel|json/`.
 
 Close the reports in Excel before rerunning; Windows locks open files.

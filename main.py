@@ -110,6 +110,10 @@ def main() -> None:
         save_report(checked, os.path.join(output_dir, "checked-pcm.xlsx"))
 
     print(f"Index JSON -> {fi.to_json(output_dir)}")
+    print(
+        "Rows left out (no normalized CIPS/PCM file) -> "
+        f"{os.path.join(output_dir, FileIndex.EXCLUDED_JSON_FILENAME)}"
+    )
 
 
 if __name__ == "__main__":

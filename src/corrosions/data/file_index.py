@@ -37,6 +37,10 @@ class FileIndex:
     Attributes:
         COLUMNS (list[str]): Required columns that must be present in the source Excel.
         DATA_TYPES (tuple[str, str]): Data-type identifiers used to locate files on disk.
+        JSON_FILENAME (str): Index JSON written by ``to_json``.
+        EXCLUDED_JSON_FILENAME (str): JSON of the rows ``to_json`` left out.
+        NORMALIZED_FILE_KEYS (tuple[str, str]): Keys a row needs to be kept
+            by ``to_json``.
         filepath (str): Path to the source Excel file.
         filename (str): Base filename of the source Excel file.
         filename_slug (str): Slugified filename stem, used for output artifacts.
@@ -66,6 +70,16 @@ class FileIndex:
     ]
 
     DATA_TYPES: tuple[str, str] = ("CIPS", "PCM")
+
+    # Written by to_json() under its output_dir.
+    JSON_FILENAME: str = "file_index.json"
+    EXCLUDED_JSON_FILENAME: str = "file_index_excluded.json"
+
+    # A row goes into JSON_FILENAME only when all of these are set.
+    NORMALIZED_FILE_KEYS: tuple[str, str] = (
+        "normalized_cips_file",
+        "normalized_pcm_file",
+    )
 
     def __init__(
         self,
@@ -704,9 +718,18 @@ class FileIndex:
         """Write the index as JSON records to ``<output_dir>/file_index.json``.
 
         Runs ``fix()`` first if needed, so empty ``Segment`` values are filled
-        from ``Sub Segment``. One record per row of ``df``:
+        from ``Sub Segment``. Only rows with both a ``normalized_cips_file``
+        and a ``normalized_pcm_file`` (``NORMALIZED_FILE_KEYS``) are written,
+        so run ``check_cips_file`` and ``check_pcm_file`` first. Every other
+        row goes to ``<output_dir>/file_index_excluded.json`` instead, with
+        the same keys minus ``id``, plus ``cips_file`` / ``pcm_file`` (the
+        source filenames from the index, ``null`` when the index has none)
+        and ``missing`` (the ``NORMALIZED_FILE_KEYS`` that are ``null``). The
+        reason a file was not normalized is in the ``check_*_file`` report.
 
-        - ``id`` (int): position, ``0..n-1``.
+        Keys of each written record:
+
+        - ``id`` (int): position among the written records, ``0..n-1``.
         - ``year`` (int), ``area`` (str).
         - ``area_code`` (str): slug of ``<area>-<year>``, e.g.
           ``"jakarta-2025"``.
@@ -721,17 +744,20 @@ class FileIndex:
         - ``normalized_pcm_file`` (str | None): set by ``check_pcm_file``;
           ``None`` until it ran, and for rows without a usable PCM file.
 
-        Empty values are written as ``null``.
+        Empty values are written as ``null``. Both files are always written,
+        possibly as ``[]``.
 
         Args:
             output_dir (str | None): Destination directory. Defaults to
                 ``<cwd>/output``.
 
         Returns:
-            str: Path of the written JSON file.
+            str: Path of ``file_index.json``. The excluded rows are next to it,
+                in ``EXCLUDED_JSON_FILENAME``.
 
         Example:
             >>> index.check_cips_file("output/raw_data", n_jobs=-1)
+            >>> index.check_pcm_file("output/raw_data", n_jobs=-1)
             >>> index.to_json()
             'output/file_index.json'
         """
@@ -739,38 +765,51 @@ class FileIndex:
             self.fix()
 
         records = []
-        for position, (_, row) in enumerate(self.df.iterrows()):
+        excluded = []
+        for _, row in self.df.iterrows():
             year = _json_value(row["Year"], whole_as_int=True)
             area = _json_value(row["Area"])
             segment = _json_value(row["Segment"])
             diameter = _json_value(row["Diameter"], whole_as_int=True)
-            records.append(
-                {
-                    "id": position,
-                    "year": year,
-                    "area": area,
-                    "area_code": slugify(f"{area}-{year}"),
-                    "segment": segment,
-                    "pipe_diameter": diameter,
-                    "length": _json_value(row["Length"]),
-                    "segment_code": (
-                        slugify(f"{segment}-{diameter}") if segment else None
-                    ),
-                    "cips_protection": _json_value(row.get("cips_protection")),
-                    "normalized_cips_file": _json_value(
-                        row.get("normalized_cips_file")
-                    ),
-                    "normalized_pcm_file": _json_value(row.get("normalized_pcm_file")),
-                }
-            )
+            record = {
+                "year": year,
+                "area": area,
+                "area_code": slugify(f"{area}-{year}"),
+                "segment": segment,
+                "pipe_diameter": diameter,
+                "length": _json_value(row["Length"]),
+                "segment_code": (slugify(f"{segment}-{diameter}") if segment else None),
+                "cips_protection": _json_value(row.get("cips_protection")),
+                "normalized_cips_file": _json_value(row.get("normalized_cips_file")),
+                "normalized_pcm_file": _json_value(row.get("normalized_pcm_file")),
+            }
+
+            missing = [key for key in self.NORMALIZED_FILE_KEYS if record[key] is None]
+            if missing:
+                excluded.append(
+                    {
+                        **record,
+                        "cips_file": _json_value(row["CIPS"]),
+                        "pcm_file": _json_value(row["PCM"]),
+                        "missing": missing,
+                    }
+                )
+            else:
+                records.append({"id": len(records), **record})
 
         output_dir = resolve_output_dir(output_dir)
-        filepath = os.path.join(output_dir, "file_index.json")
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(records, f, indent=4, ensure_ascii=False)
+        filepath = os.path.join(output_dir, self.JSON_FILENAME)
+        excluded_filepath = os.path.join(output_dir, self.EXCLUDED_JSON_FILENAME)
+        for path, data in ((filepath, records), (excluded_filepath, excluded)):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
 
         if self.verbose:
-            logger.info(f"Wrote {len(records)} records to {filepath}")
+            logger.info(
+                f"Wrote {len(records)} records to {filepath}; "
+                f"{len(excluded)} rows without a normalized CIPS/PCM file to "
+                f"{excluded_filepath}"
+            )
 
         return filepath
 
