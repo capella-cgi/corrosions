@@ -284,7 +284,7 @@ def test_one_bad_gps_fix_at_an_end_does_not_flip_the_survey(tmp_path):
     report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
 
     # first/last reading alone would say "starts east"; the averaged ends don't
-    assert report.iloc[0]["cips_axis"] == "east-west"
+    assert report.iloc[0]["cips_axis"] == "west-east"
     assert not report.iloc[0]["cips_reversed"]
     assert not report.iloc[0]["pcm_reversed"]
 

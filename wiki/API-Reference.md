@@ -685,8 +685,8 @@ the normalized JSON **and Excel** files **in place** so both surveys start at
 the same end:
 
 1. **CIPS starts by the main direction of its line** (`START`): an
-   east-west line starts at its **west** end, a north-south line at its
-   **north** end. The line is east-west when its two ends are further apart
+   west-east line starts at its **west** end, a north-south line at its
+   **north** end. The line is west-east when its two ends are further apart
    east-west than north-south (`cips_axis` in the report).
 2. **PCM follows CIPS**: it is reversed when its last end is closer than its
    first end to the (synced) CIPS start, so the pair always agrees.
@@ -727,7 +727,7 @@ same order every time, so running `sync()` again changes nothing.
 | `EXCEL_REQUIRED_COLUMNS` | Columns an Excel must have to be reversed: the survey's `JSON_COLUMNS`, plus `PCM.REQUIRED_COLUMNS` for PCM. |
 | `EXCEL_COLUMNS` | Excel names of the order-dependent values: `Distance`, `Real Distance`, `dbma`, `Current Loss Rate`, `Condition`. |
 | `END_READINGS` | Readings averaged at each end of a survey (`5`). |
-| `START` | Where a CIPS survey starts, by line direction: `{"east-west": "west", "north-south": "north"}`. Set to `"east"` / `"south"` to flip. |
+| `START` | Where a CIPS survey starts, by line direction: `{"west-east": "west", "north-south": "north"}`. Set to `"east"` / `"south"` to flip. |
 | `REPORT_COLUMNS` | Columns of the `sync()` report, in order. |
 | `data` | Records of the index JSON. |
 | `normalize_dir` | Root of the normalized files, `<normalize_dir>/<cips\|pcm>/<json\|excel>/<file>`. |
@@ -749,8 +749,8 @@ mean of `END_READINGS` readings (or half the survey when shorter).
 
 #### `cips_direction(first, last) -> tuple[str, bool]` *(classmethod)*
 
-Return the main direction of a CIPS line (`"east-west"` or
-`"north-south"`, east-west on a tie) and whether it must be reversed to start
+Return the main direction of a CIPS line (`"west-east"` or
+`"north-south"`, west-east on a tie) and whether it must be reversed to start
 at `START[axis]`.
 
 #### `sync() -> pd.DataFrame`
@@ -762,14 +762,14 @@ Sync every segment and return one report row per index record
 | --- | --- |
 | `year`, `area`, `segment_code` | From the index record. |
 | `start_gap_m` | Meters between the CIPS and PCM start ends after syncing. A large gap means the two files do not cover the same stretch, or one of them belongs to another segment. |
-| `cips_axis` | `east-west` or `north-south`, the main direction of the CIPS line. |
+| `cips_axis` | `west-east` or `north-south`, the main direction of the CIPS line (and the direction it is walked after syncing). |
 | `cips_reversed`, `pcm_reversed` | Whether that survey was reversed and rewritten (JSON and Excel). |
 | `reason` | Why a segment was skipped (missing, unreadable or empty file, missing keys/columns, missing Excel, `write failed: ...`); empty when synced. Other segments still run. |
 | `normalized_cips_file`, `normalized_pcm_file` | From the index record. |
 | `cips_json_path`, `pcm_json_path`, `cips_excel_path`, `pcm_excel_path` | Full paths of the four files, also for skipped segments. |
 
 On the 2022-2025 data (182 segments, `n_jobs=-1`): the sync took 14 s,
-0 errors. 92 lines are east-west and 90 north-south. 71 CIPS (37 east-west,
+0 errors. 92 lines are west-east and 90 north-south. 71 CIPS (37 west-east,
 34 north-south) and 73 PCM surveys reversed. 34 segments have `start_gap_m`
 above 200 m. Some of them are partial coverage (the surveys touch, but PCM
 covers only part of the CIPS line); others point to the wrong file in the

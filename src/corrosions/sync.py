@@ -5,7 +5,7 @@ directions (e.g. PCM east to west, CIPS west to east). ``SyncData`` reads the
 index written by ``FileIndex.to_json`` and, for every segment, reorders the
 normalized files so both surveys start at the same end:
 
-1. CIPS starts by the main direction of its line: an east-west line starts
+1. CIPS starts by the main direction of its line: a west-east line starts
    at its west end, a north-south line at its north end (``START``).
 2. PCM starts at the end closer to the CIPS start, so the pair always agrees.
 
@@ -71,7 +71,7 @@ class SyncData:
             ``condition``.
         END_READINGS (int): Readings averaged at each end of a survey.
         START (dict[str, str]): Where a CIPS survey starts, by the main
-            direction of its line: ``"east-west"`` -> ``"west"`` or
+            direction of its line: ``"west-east"`` -> ``"west"`` or
             ``"east"``; ``"north-south"`` -> ``"north"`` or ``"south"``.
         json_file_index (str): Path to the index JSON (``file_index.json``).
         data (list[dict]): Records of the index JSON.
@@ -123,7 +123,7 @@ class SyncData:
 
     END_READINGS: int = 5
 
-    START: dict[str, str] = {"east-west": "west", "north-south": "north"}
+    START: dict[str, str] = {"west-east": "west", "north-south": "north"}
 
     REPORT_COLUMNS: list[str] = [
         "year",
@@ -242,7 +242,7 @@ class SyncData:
 
         1. The ends of each survey are the averages of its first and last
            ``END_READINGS`` readings (fewer for short surveys).
-        2. CIPS: its line is ``"east-west"`` when its ends are further apart
+        2. CIPS: its line is ``"west-east"`` when its ends are further apart
            east-west than north-south, else ``"north-south"``. It is reversed
            unless it already starts at ``START[axis]`` (west / north).
         3. PCM is reversed when its last end is closer than its first end to
@@ -265,7 +265,7 @@ class SyncData:
             pd.DataFrame: One row per index record (``REPORT_COLUMNS``):
                 ``year``, ``area``, ``segment_code``, ``start_gap_m`` (meters
                 between the CIPS and PCM start ends after syncing),
-                ``cips_axis`` (``"east-west"`` / ``"north-south"``),
+                ``cips_axis`` (``"west-east"`` / ``"north-south"``),
                 ``cips_reversed``, ``pcm_reversed`` (JSON and Excel),
                 ``reason`` (``None`` when synced), the index filenames
                 ``normalized_cips_file`` / ``normalized_pcm_file`` and the
@@ -326,8 +326,8 @@ class SyncData:
             last (Point): Last end of the survey.
 
         Returns:
-            tuple[str, bool]: ``"east-west"`` or ``"north-south"`` (whichever
-                span between the ends is longer; east-west on a tie) and
+            tuple[str, bool]: ``"west-east"`` or ``"north-south"`` (whichever
+                span between the ends is longer; west-east on a tie) and
                 ``True`` when the survey does not start at ``START[axis]``.
         """
         east_west = _distance(first, (first[0], last[1]))
@@ -335,8 +335,8 @@ class SyncData:
 
         if east_west >= north_south:
             starts_west = first[1] <= last[1]
-            wanted_west = cls.START["east-west"] == "west"
-            return "east-west", starts_west != wanted_west
+            wanted_west = cls.START["west-east"] == "west"
+            return "west-east", starts_west != wanted_west
 
         starts_north = first[0] >= last[0]
         wanted_north = cls.START["north-south"] == "north"
