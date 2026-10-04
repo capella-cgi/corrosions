@@ -108,6 +108,29 @@ class PCM(BaseData):
         self.medium_to_poor_percentage: float = 0.0
         self.medium_to_high_percentage: float = 0.0
 
+    def clean(self) -> Self:
+        """Drop dropped readings, then apply ``BaseData.clean``.
+
+        A reading with ``4Hz Current (A) <= 0`` is a lost signal (the locator
+        records ``0`` current and ``0`` depth): it has no ``dbma``, so it
+        would get no loss rate, leave the next reading without one too, and
+        count as ``Medium to Poor``. It is dropped, so the next reading's
+        rate is measured against the last valid one. Then ``BaseData.clean``
+        drops empty rows, rows with an empty or ``0`` coordinate, rows with
+        an empty ``CLEAN_REQUIRED_COLUMNS`` value, and duplicate points.
+
+        Returns:
+            Self: ``self``, to allow method chaining.
+
+        Raises:
+            ValueError: If no row is left.
+        """
+        if "4Hz Current (A)" in self.df.columns:
+            current = self.df["4Hz Current (A)"]
+            # NaN is left for BaseData.clean (CLEAN_REQUIRED_COLUMNS)
+            self.df = self.df[~(current <= 0)]
+        return super().clean()
+
     @staticmethod
     def current_loss(
         dbma: pd.Series, distance: pd.Series
@@ -152,7 +175,8 @@ class PCM(BaseData):
           It replaces the ``Distance`` column some exports already have.
         - ``Real Distance``: running total of ``Distance``, in meters.
         - ``dbma``: ``20 * log10(4Hz Current (A) * 1000)``, rounded to 2
-          decimals. Empty when the current is ``<= 0`` (log is undefined).
+          decimals. ``clean`` drops readings with a current ``<= 0`` (log is
+          undefined); should one remain, its ``dbma`` is empty.
         - ``Current Loss Rate``: ``|Δdbma / Δdistance| * 1000`` between a
           reading and the previous one, rounded to 2 decimals; ``0`` for the
           first reading. Empty when either ``dbma`` is empty.

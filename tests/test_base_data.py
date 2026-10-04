@@ -624,16 +624,21 @@ def test_pcm_normalize_replaces_source_distance_column(tmp_path):
     assert pcm.df["Distance"].tolist() == pytest.approx([0.0, 111.195], abs=1e-3)
 
 
-def test_pcm_normalize_non_positive_current(tmp_path):
-    path = _write_excel(tmp_path / "PCM zero.xlsx", _pcm_track([0.5, 0.0, 0.45, 0.44]))
+def test_pcm_clean_drops_readings_without_current(tmp_path):
+    # a lost signal: 0 current (and 0 depth); a negative current too
+    path = _write_excel(
+        tmp_path / "PCM zero.xlsx", _pcm_track([0.5, 0.0, 0.45, -0.1, 0.44])
+    )
     pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().normalize()
     df = pcm.df
-    # log10 is undefined for current <= 0: that row and the next have no rate
-    assert pd.isna(df["dbma"].iloc[1])
-    assert df["Current Loss Rate"].isna().tolist() == [False, True, True, False]
-    # an empty rate counts as Medium to Poor
-    assert df["Condition"].tolist()[1:3] == ["Medium to Poor", "Medium to Poor"]
-    assert df["Condition"].iloc[3] == "Medium to High"
+
+    assert df["4Hz Current (A)"].tolist() == [0.5, 0.45, 0.44]
+    # the next reading is measured against the last valid one, 2 steps back
+    assert df["Distance"].tolist() == pytest.approx([0.0, 222.39, 222.39], abs=1e-2)
+    assert df["dbma"].notna().all()
+    assert df["Current Loss Rate"].notna().all()
+    assert df["Current Loss Rate"].iloc[1] == round(abs(53.06 - 53.98) / 222.39 * 1000, 2)
+    assert pcm.medium_to_high_percentage == 100.0
 
 
 def test_pcm_normalize_after_clean_leaves_index_gaps(tmp_path):

@@ -336,7 +336,7 @@ surveys start at the same end. The per-segment report is stored on
 | `name` | `Segment`. |
 | `code` | Slug of `<name>-<diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
 | `diameter` | `Diameter`, as an int when whole (`16`, not `16.0`). |
-| `pipe_length` | `Length`, always a float (`2.0` stays `2.0`). |
+| `pipe_length` | `Length` in km, always a float (`2.0` stays `2.0`). When `Length` is empty: the surveyed length, the last `Real Distance` of the normalized CIPS (`df` column `cips_length_km`), else of the normalized PCM (`pcm_length_km`), from meters to km, 3 decimals; `null` without either. |
 | `cips_protection` | `"ICCP"` / `"SACP"`, set by `check_cips_file`; `null` until it ran. |
 | `total_anomaly` | Number of ACVG/DCVG anomalies of the segment (`AcvgDcvgFile.count`), set by `assign_acvg_dcvg` (`df` column `acvg_dcvg_total_anomaly`); `null` until it ran and for segments without ACVG/DCVG anomalies. Written right after `unprotected`. |
 | `protected`, `unprotected` | Share of the CIPS readings that are `PROTECTED` or `OVER PROTECTED` / `UNPROTECTED`, in percent (they add up to 100). Set by `check_cips_file` (`df` columns `cips_protected_percentage` / `cips_unprotected_percentage`); `null` without a normalized CIPS. |
@@ -567,7 +567,7 @@ Requires a completed `clean()` (`RuntimeError` otherwise) and raises
 | --- | --- |
 | `Distance` | Meters from the previous reading (`0` for the first), from the `Int GPS` coordinates, as in CIPS. Replaces the `Distance` column some exports already have. |
 | `Real Distance` | Running total of `Distance`, in meters. |
-| `dbma` | `20 * log10(4Hz Current (A) * 1000)`, rounded to 2 decimals. Empty when the current is `<= 0` (log undefined). |
+| `dbma` | `20 * log10(4Hz Current (A) * 1000)`, rounded to 2 decimals. `clean()` drops readings with a current `<= 0` (a lost signal, often with `0` depth), so the next reading's rate is taken against the last valid one. |
 | `Current Loss Rate` | `abs(Δdbma / Δdistance) * 1000` between a reading and the previous one, rounded to 2 decimals; `0` for the first reading. Empty when either `dbma` is empty. |
 | `Condition` | `Medium to High` when `Current Loss Rate <= 50`, otherwise `Medium to Poor`, including when the rate is empty (no `dbma`). |
 
@@ -911,7 +911,7 @@ data.normalize("output/normalize/cips/json/2024-<cips slug>.json")
 | `REQUIRED_COLUMNS` | `AcvgDcvg.REQUIRED_COLUMNS` |
 | `NUMERIC_COLUMNS` | `Latitude`, `Longitude` + `AcvgDcvg.NUMERIC_COLUMNS` |
 | `CLEAN_REQUIRED_COLUMNS` / `UNIQUE_COLUMNS` | `Latitude`, `Longitude` |
-| `JSON_COLUMNS` | `latitude`, `longitude`, `real_distance`, `anomaly_location` (`Lokasi Anomali`), `kondisi_permukaan`, `diameter` (`Dia (inch)`), `on_potential`, `off_potential`, `ir_drop`, `result_acvg` (`Hasil ACVG (dB)`), `pipe_depth` (`Kedalaman Pipa (m)`), `drop_pcm`, `survey_dcvg` / `survey_acvg` (`Tgl DCVG` / `Tgl ACVG`), `closest_cips_condition` (`Condition`). `Segmen` is in the Excel only. |
+| `JSON_COLUMNS` | `latitude`, `longitude`, `real_distance`, `anomaly_location` (`Lokasi Anomali`), `surface_condition` (`Kondisi Permukaan`), `diameter` (`Dia (inch)`), `on_potential`, `off_potential`, `ir_drop`, `result_acvg` (`Hasil ACVG (dB)`), `pipe_depth` (`Kedalaman Pipa (m)`), `drop_pcm`, `survey_dcvg` / `survey_acvg` (`Tgl DCVG` / `Tgl ACVG`), `closest_cips_condition` (`Condition`). `Segmen` is in the Excel only. |
 | `cips_json` | CIPS JSON used by the last `normalize`, or `None` |
 | `count` | Number of anomalies (rows of `df`) after `normalize`; `0` before. |
 
@@ -936,7 +936,7 @@ Writes `normalize_excel_filepath`
 (`<output_dir>/normalize/acvg_dcvg/excel/<year>-<slug>.xlsx`, original column
 names) and `normalize_json_filepath`
 (`<output_dir>/normalize/acvg_dcvg/json/<year>-<slug>.json`, `JSON_COLUMNS`
-keys; dates as `YYYY-MM-DD`, date text such as `20-May` kept; empty cells
+keys; `survey_dcvg` / `survey_acvg` always `YYYY-MM-DD` or `null`: date text is parsed, `20-May` takes the file year (`2024-05-20`), non-date text is `null`; empty cells
 `null`). Raises `RuntimeError` before `clean`, `FileNotFoundError` for a
 missing `cips_json`.
 

@@ -470,8 +470,10 @@ class FileIndex:
         Also adds ``normalized_pcm_file`` to ``df`` (filename of the
         normalized JSON, ``PCM.normalize_json_filepath``) and
         ``pcm_medium_to_poor`` / ``pcm_medium_to_high``
-        (``PCM.medium_to_poor_percentage`` / ``medium_to_high_percentage``),
-        used by ``to_json``. It is ``None`` for rows without a PCM file, or whose file
+        (``PCM.medium_to_poor_percentage`` / ``medium_to_high_percentage``)
+        and ``pcm_length_km`` (last ``Real Distance`` of the normalized PCM,
+        in km; ``to_json``'s fallback for an empty ``Length``), used by
+        ``to_json``. It is ``None`` for rows without a PCM file, or whose file
         failed to load, clean or normalize.
 
         Args:
@@ -485,8 +487,8 @@ class FileIndex:
                 ``filepath``, ``is_valid``, ``n_missing``, ``n_duplicates``,
                 ``missing_columns``, ``duplicates``, ``normalized``
                 (``PCM.normalized``), ``normalized_pcm_file``,
-                ``medium_to_poor_percentage``, ``medium_to_high_percentage``
-                and ``reason``.
+                ``medium_to_poor_percentage``, ``medium_to_high_percentage``,
+                ``length_km`` and ``reason``.
                 Rows with a missing file on disk, a load/clean error or a
                 normalize error are recorded as ``is_valid=False`` with a
                 populated ``reason``.
@@ -500,6 +502,7 @@ class FileIndex:
             "normalized_pcm_file": None,
             "medium_to_poor_percentage": None,
             "medium_to_high_percentage": None,
+            "length_km": None,
         }
 
         def _check_row(row: pd.Series) -> dict:
@@ -532,6 +535,7 @@ class FileIndex:
                 "normalized_pcm_file": None,
                 "medium_to_poor_percentage": None,
                 "medium_to_high_percentage": None,
+                "length_km": None,
                 "reason": None,
             }
 
@@ -550,6 +554,7 @@ class FileIndex:
                 )
                 result["medium_to_poor_percentage"] = pcm.medium_to_poor_percentage
                 result["medium_to_high_percentage"] = pcm.medium_to_high_percentage
+                result["length_km"] = _length_km(pcm.df)
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["PCM"])]
@@ -570,6 +575,7 @@ class FileIndex:
                 "pcm_medium_to_high": [
                     result["medium_to_high_percentage"] for result in results
                 ],
+                "pcm_length_km": [result["length_km"] for result in results],
             },
         )
 
@@ -585,6 +591,7 @@ class FileIndex:
             "normalized_pcm_file",
             "medium_to_poor_percentage",
             "medium_to_high_percentage",
+            "length_km",
             "reason",
         ]
 
@@ -612,6 +619,8 @@ class FileIndex:
           ``CIPS.protected_percentage`` / ``unprotected_percentage``, share
           of readings that are (over) protected / unprotected (only set when
           normalized).
+        - ``cips_length_km``: last ``Real Distance`` of the normalized CIPS,
+          in km (3 decimals); ``to_json`` uses it when ``Length`` is empty.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned
@@ -628,8 +637,8 @@ class FileIndex:
                 ``missing_columns``, ``n_duplicates``, ``cleaned_path``,
                 ``cips_protection``, ``protected_percentage``,
                 ``unprotected_percentage``, ``normalized``
-                (``CIPS.normalized``), ``normalized_cips_file`` and
-                ``reason``.
+                (``CIPS.normalized``), ``normalized_cips_file``,
+                ``length_km`` and ``reason``.
                 Check columns describe the file before cleaning.
                 The per-row duplicate list is left out: CIPS files can repeat
                 thousands of GPS points, too many for an Excel cell, and
@@ -662,6 +671,7 @@ class FileIndex:
             "unprotected_percentage",
             "normalized",
             "normalized_cips_file",
+            "length_km",
             "reason",
         ]
 
@@ -699,6 +709,7 @@ class FileIndex:
                 "unprotected_percentage": None,
                 "normalized": False,
                 "normalized_cips_file": None,
+                "length_km": None,
                 "reason": None,
             }
 
@@ -727,6 +738,7 @@ class FileIndex:
                 )
                 result["protected_percentage"] = cips.protected_percentage
                 result["unprotected_percentage"] = cips.unprotected_percentage
+                result["length_km"] = _length_km(cips.df)
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
@@ -753,6 +765,7 @@ class FileIndex:
                 "cips_unprotected_percentage": [
                     result.get("unprotected_percentage") for result in results
                 ],
+                "cips_length_km": [result.get("length_km") for result in results],
             },
         )
 
@@ -803,7 +816,10 @@ class FileIndex:
         - ``code`` (str): slug of ``<name>-<diameter>``, e.g.
           ``"pipa-servis-indonesia-power-16"``.
         - ``diameter`` (int | float): ``Diameter``, as an int when whole.
-        - ``pipe_length`` (float): ``Length``.
+        - ``pipe_length`` (float | None): ``Length``, in km. When it is
+          empty: the surveyed length, i.e. the last ``Real Distance`` of the
+          normalized CIPS (``cips_length_km``), else of the normalized PCM
+          (``pcm_length_km``), converted from meters to km (3 decimals).
         - ``cips_protection`` (str | None): ``"ICCP"`` / ``"SACP"``, set by
           ``check_cips_file``.
         - ``protected`` / ``unprotected`` (float | None): share of CIPS
@@ -924,7 +940,9 @@ class FileIndex:
             "name": segment,
             "code": (slugify(f"{segment}-{diameter}") if segment else None),
             "diameter": diameter,
-            "pipe_length": _json_value(row["Length"]),
+            "pipe_length": _first_value(
+                row["Length"], row.get("cips_length_km"), row.get("pcm_length_km")
+            ),
             "cips_protection": _json_value(row.get("cips_protection")),
             "protected": _json_value(row.get("cips_protected_percentage")),
             "unprotected": _json_value(row.get("cips_unprotected_percentage")),
@@ -1119,6 +1137,26 @@ def _ordered(record: dict, order: list[str]) -> dict:
     """
     first = {key: record[key] for key in order if key in record}
     return {**first, **{k: v for k, v in record.items() if k not in first}}
+
+
+def _length_km(df: pd.DataFrame) -> float | None:
+    """Return the last ``Real Distance`` (meters) of a normalized survey in km.
+
+    Rounded to 3 decimals (meters); ``None`` without a ``Real Distance``.
+    """
+    if df.empty or "Real Distance" not in df.columns:
+        return None
+    meters = df["Real Distance"].iloc[-1]
+    return None if pd.isna(meters) else round(float(meters) / 1000, 3)
+
+
+def _first_value(*values):
+    """Return the first value that is not empty, as ``_json_value`` gives it."""
+    for value in values:
+        value = _json_value(value)
+        if value is not None:
+            return value
+    return None
 
 
 def _json_value(value, whole_as_int: bool = False):

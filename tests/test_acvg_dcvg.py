@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from slugify import slugify
 
-from corrosions.data.acvg_dcvg import AcvgDcvg, AcvgDcvgFile
+from corrosions.data.acvg_dcvg import AcvgDcvg, AcvgDcvgFile, _iso_date
 
 # Header as in the workbooks, incl. the trailing spaces of 2023/2025 exports
 HEADER = [
@@ -497,7 +497,8 @@ def test_file_normalize_places_anomalies_on_the_cips_line(tmp_path):
     assert data.df["CIPS Offset (m)"].iloc[2] > 10_000
     with open(data.normalize_json_filepath, encoding="utf-8") as f:
         records = json.load(f)
-    assert [r["survey_dcvg"] for r in records] == ["20-May", "2024-05-20", "2024-05-20"]
+    # date text takes the file's year: always YYYY-MM-DD
+    assert [r["survey_dcvg"] for r in records] == ["2024-05-20"] * 3
     assert "CIPS Offset (m)" in pd.read_excel(data.normalize_excel_filepath).columns
 
 
@@ -512,3 +513,41 @@ def test_file_normalize_without_cips(tmp_path):
         tmp_path / "out" / "normalize" / "acvg_dcvg" / "json"
         / "2024-acvg-dcvg-seg-a-16-jakarta.json"
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (datetime(2024, 5, 20), "2024-05-20"),
+        (pd.Timestamp("2023-07-16"), "2023-07-16"),
+        ("20-May", "2024-05-20"),  # no year: the file's year
+        (" 01-Jul ", "2024-07-01"),
+        ("29-Feb", "2024-02-29"),  # leap year
+        ("2024-09-23", "2024-09-23"),
+        ("23/09/2024", "2024-09-23"),
+        ("not a date", None),
+        (float("nan"), None),
+        (None, None),
+        (pd.NaT, None),
+    ],
+)
+def test_iso_date(value, expected):
+    assert _iso_date(value, 2024) == expected
+
+
+def test_empty_date_cell_in_a_date_column_is_kept(setup):
+    # a date column with a blank is read as datetime64: the blank is NaT,
+    # which must not count as "dated in another year"
+    path = os.path.join(setup["data_dir"], "Rekap 2024.xlsx")
+    sheets = pd.read_excel(path, sheet_name=None)
+    jakarta = sheets["Jakarta"]
+    blank = _anomaly("Pipa Servis Indonesia Power", 16, -6.1001, 106.8001)
+    blank["Tgl DCVG"] = None
+    sheets["Jakarta"] = pd.concat([jakarta, pd.DataFrame([blank])], ignore_index=True)
+    with pd.ExcelWriter(path) as writer:
+        for name, df in sheets.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+
+    anomalies = _acvg(setup).load().anomalies
+    power = anomalies[anomalies["Segmen"] == "Pipa Servis Indonesia Power"]
+    assert len(power) == 3

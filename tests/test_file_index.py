@@ -6,7 +6,7 @@ import pytest
 
 from corrosions.data.cips import CIPS
 from corrosions.data.pcm import PCM
-from corrosions.data.file_index import FileIndex
+from corrosions.data.file_index import FileIndex, _length_km
 
 
 def _write_sheets(path, sheets: dict[str, dict]) -> None:
@@ -159,6 +159,8 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert good.sum() == 100.0
     assert report.loc["good.xlsx", "protected_percentage"] == good.iloc[0]
     assert pd.isna(index.df.loc[2, "cips_protected_percentage"])  # clean failed
+    # survey length in km, from the normalized CIPS' last Real Distance
+    assert index.df.loc[0, "cips_length_km"] == report.loc["good.xlsx", "length_km"] > 0
     assert pd.isna(index.df.loc[6, "normalized_cips_file"])  # missing.xlsx
     assert pd.isna(index.df.loc[7, "cips_protection"])  # no CIPS filename
 
@@ -573,6 +575,7 @@ def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
     assert good.sum() == 100.0
     assert report.loc["PCM 01 good.xlsx", "medium_to_high_percentage"] == good.iloc[1]
     assert index.df["pcm_medium_to_high"].isna().tolist()[1:] == [True, True, True]
+    assert index.df.loc[0, "pcm_length_km"] == report.loc["PCM 01 good.xlsx", "length_km"] > 0
 
     records = json.loads(
         open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read()
@@ -741,3 +744,31 @@ def test_area_json_is_written_and_follows_assign_acvg_dcvg(tmp_path):
     with open(out / FileIndex.AREA_JSON_FILENAME, encoding="utf-8") as f:
         (area,) = json.load(f)
     assert area["total_anomaly"] == 9
+
+
+def test_pipe_length_falls_back_to_the_surveyed_length(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path,
+        [
+            {"Segment": "Given", "Length": 1.5},
+            {"Segment": "From CIPS", "Length": None},
+            {"Segment": "From PCM", "Length": None},
+            {"Segment": "Unknown", "Length": None},
+        ],
+    )
+    index = FileIndex(str(path))
+    # what check_cips_file / check_pcm_file merge into df (km, 3 decimals)
+    index.df["cips_length_km"] = [9.9, 2.345, None, None]
+    index.df["pcm_length_km"] = [9.9, 9.9, 0.812, None]
+
+    lengths = [index._record(row)["pipe_length"] for _, row in index.df.iterrows()]
+
+    # Length wins; else the CIPS survey length; else the PCM one
+    assert lengths == [1.5, 2.345, 0.812, None]
+
+
+def test_length_km_is_the_last_real_distance():
+    df = pd.DataFrame({"Real Distance": [0.0, 1200.0, 2345.6789]})
+    assert _length_km(df) == 2.346
+    assert _length_km(pd.DataFrame({"Real Distance": []})) is None

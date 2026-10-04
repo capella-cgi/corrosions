@@ -910,7 +910,7 @@ class AcvgDcvgFile(BaseData):
         "Longitude": "longitude",
         "Real Distance": "real_distance",
         "Lokasi Anomali": "anomaly_location",
-        "Kondisi Permukaan": "kondisi_permukaan",
+        "Kondisi Permukaan": "surface_condition",
         "Dia (inch)": "diameter",
         "On Potential (volt)": "on_potential",
         "Off Potential (volt)": "off_potential",
@@ -982,9 +982,11 @@ class AcvgDcvgFile(BaseData):
           (``<output_dir>/normalize/acvg_dcvg/json/<year>-<slug>.json``): one
           record per anomaly with the ``JSON_COLUMNS`` keys, in order
           (``Condition`` is ``closest_cips_condition``; ``Segmen`` is left
-          out, the file is one segment already). Dates
-          are ``YYYY-MM-DD`` (date text such as ``"20-May"`` is kept as is);
-          empty cells, including blank text, are ``null``.
+          out, the file is one segment already). ``survey_dcvg`` /
+          ``survey_acvg`` are always ``YYYY-MM-DD`` or ``null``: date cells
+          are formatted, date text is parsed (``"20-May"`` takes the file's
+          ``year``: ``"2024-05-20"``), and text that is not a date is
+          ``null``. Other empty cells, including blank text, are ``null``.
 
         Args:
             cips_json (str | None): Normalized CIPS JSON of the segment
@@ -1061,7 +1063,11 @@ class AcvgDcvgFile(BaseData):
         # Save to JSON (JSON_COLUMNS); dates as text, blank text becomes null.
         frame = df.copy()
         for column in AcvgDcvg.DATE_COLUMNS:
-            frame[column] = frame[column].map(_iso_date).astype(object)
+            frame[column] = (
+                frame[column]
+                .map(lambda value: _iso_date(value, self.year))
+                .astype(object)
+            )
         frame = self.json_frame(frame)
         os.makedirs(self.normalize_json_dir, exist_ok=True)
         frame.to_json(self.normalize_json_filepath, orient="records")
@@ -1091,19 +1097,51 @@ def _dated_elsewhere(row: pd.Series, year: int) -> bool:
     """
     for column in AcvgDcvg.DATE_COLUMNS:
         value = row.get(column)
-        # pd.Timestamp is a datetime; NaT is not, so empty cells are skipped
-        if isinstance(value, datetime) and value.year != year:
+        # pd.Timestamp is a datetime, and so is NaT (an empty cell in a date
+        # column): skip it, its year is NaN
+        if isinstance(value, datetime) and not pd.isna(value) and value.year != year:
             return True
     return False
 
 
-def _iso_date(value):
-    """Return a date cell as ``YYYY-MM-DD``; text is kept, empty is ``None``."""
+# Date text seen in the workbooks ("20-May", 2024) plus full dates; formats
+# without a year take the survey year.
+DATE_FORMATS: tuple[str, ...] = (
+    "%Y-%m-%d",
+    "%d-%m-%Y",
+    "%d/%m/%Y",
+    "%d-%b-%Y",
+    "%d %b %Y",
+    "%d %B %Y",
+)
+DATE_FORMATS_NO_YEAR: tuple[str, ...] = ("%d-%b", "%d %b", "%d-%B", "%d %B")
+
+
+def _iso_date(value, year: int) -> str | None:
+    """Return a date cell as ``YYYY-MM-DD``, or ``None``.
+
+    Date cells are formatted; text is parsed with ``DATE_FORMATS``, or with
+    ``DATE_FORMATS_NO_YEAR`` and ``year`` (``"20-May"`` -> ``"<year>-05-20"``).
+    Empty cells and text that is not a date give ``None``.
+    """
+    if not isinstance(value, (datetime, str)) or pd.isna(value):
+        return None  # empty cell, NaN or NaT (which is a datetime)
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d")
-    if pd.isna(value):
-        return None
-    return value
+    text = value.strip()
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    for fmt in DATE_FORMATS_NO_YEAR:
+        try:
+            # parse with the year, so 29-Feb works in leap years
+            parsed = datetime.strptime(f"{text} {year}", f"{fmt} %Y")
+        except ValueError:
+            continue
+        return parsed.strftime("%Y-%m-%d")
+    return None
 
 
 def _read_index(index_csv: str) -> pd.DataFrame:
