@@ -82,7 +82,37 @@ def _assert_records_equal(actual: list[dict], expected: list[dict]) -> None:
                 assert got[key] == value, key
 
 
-def test_sync_matches_normalizing_the_reversed_survey(tmp_path):
+def _excel_of(json_path: str) -> str:
+    """Path of the normalized Excel next to a normalized JSON file."""
+    folder, name = os.path.split(json_path)
+    return os.path.join(
+        os.path.dirname(folder), "excel", os.path.splitext(name)[0] + ".xlsx"
+    )
+
+
+def _excel_from_json(normalize_dir, kind: str, filename: str) -> None:
+    """Write the Excel twin of a hand-made normalized JSON file.
+
+    Uses normalize()'s Excel names (the survey's JSON_COLUMNS, reversed); any
+    column the hand-made JSON lacks is left empty, as are PCM's other source
+    columns.
+    """
+    survey = {"cips": CIPS, "pcm": PCM}[kind]
+    records = _load(str(normalize_dir / kind / "json" / filename))
+    excel_names = {key: column for column, key in survey.JSON_COLUMNS.items()}
+    df = pd.DataFrame(records).rename(columns=excel_names)
+    extra = PCM.REQUIRED_COLUMNS if kind == "pcm" else []
+    for column in [*survey.JSON_COLUMNS, *extra]:
+        if column not in df.columns:
+            df[column] = None
+    df.insert(0, "Distance", 0.0)
+    excel = normalize_dir / kind / "excel"
+    os.makedirs(excel, exist_ok=True)
+    df.to_excel(excel / (os.path.splitext(filename)[0] + ".xlsx"), index=False)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2])
+def test_sync_matches_normalizing_the_reversed_survey(tmp_path, n_jobs):
     # both surveys walked east -> west; 0.001 degree longitude apart
     east_to_west = [106.103, 106.102, 106.101, 106.100]
     out, expected = tmp_path / "out", tmp_path / "expected"
@@ -106,7 +136,9 @@ def test_sync_matches_normalizing_the_reversed_survey(tmp_path):
         os.path.basename(cips_json),
         os.path.basename(pcm_json),
     )
-    report = SyncData(index, normalize_dir=str(out / "normalize")).sync()
+    report = SyncData(
+        index, normalize_dir=str(out / "normalize"), n_jobs=n_jobs
+    ).sync()
 
     row = report.iloc[0]
     assert row["cips_reversed"] and row["pcm_reversed"]
@@ -116,11 +148,18 @@ def test_sync_matches_normalizing_the_reversed_survey(tmp_path):
     cips = _load(cips_json)
     pcm = _load(pcm_json)
     assert cips[0]["longitude"] == 106.1  # starts at the west end
-    assert pcm[0]["int_gps_longitude"] == 106.1
+    assert pcm[0]["longitude"] == 106.1
     assert cips[0]["real_distance"] == 0.0
     _assert_records_equal(cips, _load(cips_expected))
     # current_loss_rate and condition recomputed against the new previous row
     _assert_records_equal(pcm, _load(pcm_expected))
+
+    # the normalized Excel of each survey is reversed and recomputed the same way
+    for synced, wanted in ((cips_json, cips_expected), (pcm_json, pcm_expected)):
+        got = pd.read_excel(_excel_of(synced))
+        want = pd.read_excel(_excel_of(wanted))
+        assert list(got.columns) == list(want.columns)
+        pd.testing.assert_frame_equal(got, want, check_exact=False, atol=1e-6)
 
 
 def test_sync_is_idempotent(tmp_path):
@@ -168,43 +207,126 @@ def _write_json(path, records: list[dict]) -> None:
         json.dump(records, f)
 
 
-def test_pcm_follows_cips_start_on_north_south_line(tmp_path):
-    normalize_dir = tmp_path / "normalize"
-    # north-south CIPS line: its north end (-6.10) is 0.00001 degree east, so
-    # CIPS is reversed and starts at the south end (-6.12)
+def _write_survey(normalize_dir, kind: str, filename: str, points) -> None:
+    """Write a hand-made normalized JSON (and its Excel twin) from points."""
+    record = {"real_distance": 0.0}
+    if kind == "pcm":
+        record.update(
+            {"dbma": 50.0, "current_loss_rate": 0.0, "condition": "Medium to High"}
+        )
     _write_json(
-        normalize_dir / "cips" / "json" / "c.json",
-        [
-            {"latitude": lat, "longitude": lon, "real_distance": 0.0}
-            for lat, lon in [(-6.10, 106.10001), (-6.11, 106.1), (-6.12, 106.1)]
-        ],
+        normalize_dir / kind / "json" / filename,
+        [{"latitude": lat, "longitude": lon, **record} for lat, lon in points],
     )
-    # PCM starts in the north and its own west end is that north end, but it
-    # must follow the CIPS start (south), so it is reversed anyway
-    _write_json(
-        normalize_dir / "pcm" / "json" / "p.json",
-        [
-            {
-                "int_gps_latitude": lat,
-                "int_gps_longitude": lon,
-                "real_distance": 0.0,
-                "dbma": 50.0,
-                "current_loss_rate": 0.0,
-                "condition": "Medium to High",
-            }
-            for lat, lon in [(-6.10, 106.09999), (-6.11, 106.1), (-6.12, 106.1)]
-        ],
+    _excel_from_json(normalize_dir, kind, filename)
+
+
+def test_north_south_line_starts_north_and_pcm_follows(tmp_path):
+    normalize_dir = tmp_path / "normalize"
+    # CIPS walked south -> north; its south end is slightly west, so the old
+    # "start west" rule kept it, but a north-south line now starts north
+    _write_survey(
+        normalize_dir,
+        "cips",
+        "c.json",
+        [(-6.12, 106.09999), (-6.11, 106.1), (-6.10, 106.10001)],
+    )
+    # PCM also walked south -> north: it follows the CIPS start (north)
+    _write_survey(
+        normalize_dir,
+        "pcm",
+        "p.json",
+        [(-6.12, 106.10002), (-6.11, 106.1), (-6.10, 106.09998)],
     )
     index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
 
     report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
 
-    assert report.iloc[0]["cips_reversed"]
-    assert report.iloc[0]["pcm_reversed"]
-    assert _load(str(normalize_dir / "cips" / "json" / "c.json"))[0]["latitude"] == -6.12
+    row = report.iloc[0]
+    assert row["cips_axis"] == "north-south"
+    assert row["cips_reversed"] and row["pcm_reversed"]
+    assert _load(str(normalize_dir / "cips" / "json" / "c.json"))[0]["latitude"] == -6.10
     pcm = _load(str(normalize_dir / "pcm" / "json" / "p.json"))
-    assert pcm[0]["int_gps_latitude"] == -6.12
+    assert pcm[0]["latitude"] == -6.10
     assert pcm[-1]["real_distance"] == pytest.approx(2223.9, abs=0.5)
+
+    # the JSON was rebuilt from the recalculated Excel: same values (to_json
+    # writes 10 decimal places, Excel keeps the full float)
+    pcm_excel = pd.read_excel(normalize_dir / "pcm" / "excel" / "p.xlsx")
+    assert pcm_excel["Int GPS Latitude"].tolist() == [-6.10, -6.11, -6.12]
+    assert [r["real_distance"] for r in pcm] == pytest.approx(
+        pcm_excel["Real Distance"].tolist(), abs=1e-9
+    )
+
+
+def test_start_can_be_configured(tmp_path, monkeypatch):
+    normalize_dir = tmp_path / "normalize"
+    points = [(-6.10, 106.1), (-6.11, 106.1), (-6.12, 106.1)]  # north -> south
+    _write_survey(normalize_dir, "cips", "c.json", points)
+    _write_survey(normalize_dir, "pcm", "p.json", points)
+    index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
+    monkeypatch.setitem(SyncData.START, "north-south", "south")
+
+    report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
+
+    assert report.iloc[0]["cips_reversed"]
+    assert _load(str(normalize_dir / "cips" / "json" / "c.json"))[0]["latitude"] == -6.12
+
+
+def test_one_bad_gps_fix_at_an_end_does_not_flip_the_survey(tmp_path):
+    normalize_dir = tmp_path / "normalize"
+    # west -> east, but the very last fix jumped west of the first reading
+    lons = [106.100 + i * 0.001 for i in range(11)] + [106.0995]
+    _write_survey(normalize_dir, "cips", "c.json", [(-6.1, lon) for lon in lons])
+    _write_survey(normalize_dir, "pcm", "p.json", [(-6.1, lon) for lon in lons])
+    index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
+
+    report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
+
+    # first/last reading alone would say "starts east"; the averaged ends don't
+    assert report.iloc[0]["cips_axis"] == "east-west"
+    assert not report.iloc[0]["cips_reversed"]
+    assert not report.iloc[0]["pcm_reversed"]
+
+
+def test_ends_average_the_end_readings():
+    df = pd.DataFrame({"lat": [0.0] * 12, "lon": [float(i) for i in range(12)]})
+    first, last = SyncData.ends(df, "lat", "lon")
+    assert first == (0.0, 2.0)  # mean of 0..4
+    assert last == (0.0, 9.0)  # mean of 7..11
+    short = df.iloc[:3]  # fewer than 2 * END_READINGS: one reading per end
+    assert SyncData.ends(short, "lat", "lon") == ((0.0, 0.0), (0.0, 2.0))
+
+
+def test_failed_write_leaves_files_untouched(tmp_path, monkeypatch):
+    normalize_dir = tmp_path / "normalize"
+    east_to_west = [(-6.1, 106.102), (-6.1, 106.101), (-6.1, 106.100)]
+    _write_survey(normalize_dir, "cips", "c.json", east_to_west)
+    _write_survey(normalize_dir, "pcm", "p.json", east_to_west)
+    index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
+    before = {
+        path: path.read_bytes() for path in normalize_dir.rglob("*") if path.is_file()
+    }
+
+    real_write = SyncData._write
+
+    def _write(df, path, fmt):
+        if fmt == "excel" and "pcm" in path:
+            raise OSError("disk full")
+        real_write(df, path, fmt)
+
+    # n_jobs=1 runs in this process, so the patched _write is used
+    monkeypatch.setattr(SyncData, "_write", staticmethod(_write))
+    report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
+
+    row = report.iloc[0]
+    assert row["reason"] == "write failed: OSError: disk full"
+    assert not row["cips_reversed"]
+    # every original file is unchanged and no temporary file is left behind
+    after = {
+        path: path.read_bytes() for path in normalize_dir.rglob("*") if path.is_file()
+    }
+    assert after == before
 
 
 def test_missing_file_is_reported_and_others_still_run(tmp_path):
@@ -245,3 +367,73 @@ def test_missing_required_key_raises(tmp_path):
         json.dump([record], f)
     with pytest.raises(KeyError, match="normalized_pcm_file"):
         SyncData(str(tmp_path / "file_index.json"), normalize_dir=str(tmp_path))
+
+
+def test_file_with_old_pcm_keys_is_reported(tmp_path):
+    # PCM JSON written before int_gps_latitude/longitude became latitude/longitude
+    normalize_dir = tmp_path / "normalize"
+    _write_json(
+        normalize_dir / "cips" / "json" / "c.json",
+        [{"latitude": -6.1, "longitude": 106.1, "real_distance": 0.0}],
+    )
+    _write_json(
+        normalize_dir / "pcm" / "json" / "old.json",
+        [{"int_gps_latitude": -6.1, "int_gps_longitude": 106.1, "dbma": 50.0}],
+    )
+    index = _write_index(tmp_path / "file_index.json", "c.json", "old.json")
+
+    report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
+
+    reason = report.iloc[0]["reason"]
+    assert reason.startswith("ValueError")
+    assert "['latitude', 'longitude']" in reason
+
+
+def test_missing_excel_leaves_the_segment_untouched(tmp_path):
+    normalize_dir = tmp_path / "normalize"
+    cips_records = [
+        {"latitude": -6.1, "longitude": lon, "real_distance": 0.0}
+        for lon in (106.102, 106.101, 106.100)  # east -> west: needs reversing
+    ]
+    _write_json(normalize_dir / "cips" / "json" / "c.json", cips_records)
+    _write_json(
+        normalize_dir / "pcm" / "json" / "p.json",
+        [
+            {"latitude": -6.1, "longitude": lon, "real_distance": 0.0, "dbma": 50.0}
+            for lon in (106.100, 106.101, 106.102)
+        ],
+    )
+    # the PCM Excel exists, the CIPS Excel does not
+    _excel_from_json(normalize_dir, "pcm", "p.json")
+    index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
+
+    report = SyncData(index, normalize_dir=str(normalize_dir)).sync()
+
+    row = report.iloc[0]
+    assert row["reason"].startswith("FileNotFoundError: No normalized Excel")
+    assert not row["cips_reversed"] and not row["pcm_reversed"]
+    # nothing was written: the CIPS JSON keeps its east -> west order
+    assert _load(str(normalize_dir / "cips" / "json" / "c.json")) == cips_records
+
+
+def test_report_has_start_gap_and_file_paths(tmp_path):
+    normalize_dir = tmp_path / "normalize"
+    _write_json(
+        normalize_dir / "cips" / "json" / "c.json",
+        [{"latitude": -6.1, "longitude": lon, "real_distance": 0.0} for lon in (106.100, 106.101)],
+    )
+    _write_json(
+        normalize_dir / "pcm" / "json" / "p.json",
+        [{"latitude": -6.1, "longitude": lon, "dbma": 50.0} for lon in (106.101, 106.102)],
+    )
+    index = _write_index(tmp_path / "file_index.json", "c.json", "p.json")
+
+    row = SyncData(index, normalize_dir=str(normalize_dir)).sync().iloc[0]
+
+    assert (row["year"], row["area"]) == (2025, "Jakarta")
+    # PCM starts 0.001 degree longitude east of the CIPS start (~110.57 m at -6.1)
+    assert row["start_gap_m"] == pytest.approx(110.57, abs=0.01)
+    assert row["cips_json_path"] == str(normalize_dir / "cips" / "json" / "c.json")
+    assert row["pcm_json_path"] == str(normalize_dir / "pcm" / "json" / "p.json")
+    assert row["cips_excel_path"] == str(normalize_dir / "cips" / "excel" / "c.xlsx")
+    assert row["pcm_excel_path"] == str(normalize_dir / "pcm" / "excel" / "p.xlsx")

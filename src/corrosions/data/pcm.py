@@ -63,6 +63,20 @@ class PCM(BaseData):
 
     UNIQUE_COLUMNS: tuple[str, str] = ("Int GPS Latitude", "Int GPS Longitude")
 
+    # normalize() writes these columns, in this order, to the JSON under
+    # these keys (see BaseData.json_frame).
+    JSON_COLUMNS: dict[str, str] = {
+        "Int GPS Latitude": "latitude",
+        "Int GPS Longitude": "longitude",
+        "Real Distance": "real_distance",
+        "4Hz Current (A)": "4hz_current_a",
+        "dbma": "dbma",
+        "Current Loss Rate": "current_loss_rate",
+        "Depth (m)": "depth_m",
+        "Condition": "condition",
+        "Comment (0-100)": "comment_0_100",
+    }
+
     @staticmethod
     def current_loss(
         dbma: pd.Series, distance: pd.Series
@@ -122,8 +136,9 @@ class PCM(BaseData):
           with its original column names, without the index.
         - ``normalize_json_filepath``
           (``<output_dir>/normalize/pcm/json/<year>-<slug>.json``): one record
-          per row with only these keys, in this order: ``int_gps_latitude``,
-          ``int_gps_longitude``, ``real_distance``, ``4hz_current_a``,
+          per row with only these keys, in this order: ``latitude`` and
+          ``longitude`` (from ``Int GPS Latitude`` / ``Longitude``, the same
+          keys as the CIPS JSON), ``real_distance``, ``4hz_current_a``,
           ``dbma``, ``current_loss_rate``, ``depth_m``, ``condition`` and
           ``comment_0_100``. Empty cells, including blank text, are ``null``.
 
@@ -185,21 +200,8 @@ class PCM(BaseData):
 
         self.df = df
 
-        columns_mapping = {
-            "Int GPS Latitude": "int_gps_latitude",
-            "Int GPS Longitude": "int_gps_longitude",
-            "Real Distance": "real_distance",
-            "4Hz Current (A)": "4hz_current_a",
-            "dbma": "dbma",
-            "Current Loss Rate": "current_loss_rate",
-            "Depth (m)": "depth_m",
-            "Condition": "condition",
-            "Comment (0-100)": "comment_0_100",
-        }
-
-        # Save to JSON with modified column name; blank text becomes null.
-        df = df[list(columns_mapping)].rename(columns=columns_mapping)
-        df = df.map(lambda v: None if isinstance(v, str) and not v.strip() else v)
+        # Save to JSON (JSON_COLUMNS); blank text becomes null.
+        df = self.json_frame(df)
         os.makedirs(self.normalize_json_dir, exist_ok=True)
         df.to_json(self.normalize_json_filepath, orient="records")
 

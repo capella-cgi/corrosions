@@ -655,8 +655,8 @@ def test_pcm_normalize_saves_excel_and_json(tmp_path):
     with open(pcm.normalize_json_filepath, encoding="utf-8") as f:
         records = json.load(f)
     assert list(records[0]) == [
-        "int_gps_latitude",
-        "int_gps_longitude",
+        "latitude",
+        "longitude",
         "real_distance",
         "4hz_current_a",
         "dbma",

@@ -38,9 +38,10 @@ report per data type:
   every row lands here, because the other type is never normalized.
 - `sync-report.xlsx`: the last step puts each indexed segment's CIPS and PCM
   JSON in the same direction, CIPS starting at its west end and PCM at the
-  end closer to the CIPS start. It rewrites `output/normalize/*/json/` in
-  place and recomputes `real_distance` (and PCM `current_loss_rate` /
-  `condition`). The report lists `cips_reversed`, `pcm_reversed` and
+  end closer to the CIPS start. It rewrites the JSON and Excel files in
+  `output/normalize/*/` in place and recomputes the distances (and the PCM
+  current loss rate / condition). Rewriting Excel makes this step take a
+  few minutes. The report lists `cips_reversed`, `pcm_reversed` and
   `start_gap_m` per segment; gaps over 200 m usually mean the CIPS and PCM
   files do not cover the same pipe. Skip this step with `--no-sync`. CIPS files are also normalized into
   `output/normalize/cips/excel|json/`.

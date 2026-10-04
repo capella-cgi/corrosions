@@ -22,6 +22,9 @@ class BaseData:
             ``pd.to_numeric(..., errors="coerce")`` at load time.
         CLEAN_REQUIRED_COLUMNS (list[str]): Columns whose non-NaN value is
             required for a row to survive ``clean``.
+        JSON_COLUMNS (dict[str, str]): Subclasses with ``normalize``: the
+            ``df`` columns written to the normalized JSON, in order, mapped to
+            their JSON keys (see ``json_frame``).
         UNIQUE_COLUMNS (tuple[str, str]): The (latitude, longitude) pair.
             ``check`` counts rows sharing a pair; ``clean`` drops rows where
             either is ``0`` and keeps the first row of each pair.
@@ -53,6 +56,7 @@ class BaseData:
     NUMERIC_COLUMNS: list[str]
     CLEAN_REQUIRED_COLUMNS: list[str]
     UNIQUE_COLUMNS: tuple[str, str]
+    JSON_COLUMNS: dict[str, str]
 
     def __init__(
         self,
@@ -115,6 +119,26 @@ class BaseData:
         self.cleaned: bool = False
         self.normalized: bool = False
         self._coerce_numeric()
+
+    @classmethod
+    def json_frame(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Return ``df`` as it is written to the normalized JSON.
+
+        Keeps only the ``JSON_COLUMNS`` (in their order), renames them to
+        their JSON keys and turns empty or blank text into ``None``
+        (``null``). Used by ``normalize`` and by ``corrosions.sync.SyncData``
+        to rebuild the JSON from a reversed normalized Excel.
+
+        Args:
+            df (pd.DataFrame): Normalized rows, with ``normalize``'s column
+                names (``self.df`` after ``normalize``, or the normalized
+                Excel).
+
+        Returns:
+            pd.DataFrame: One column per JSON key.
+        """
+        frame = df[list(cls.JSON_COLUMNS)].rename(columns=cls.JSON_COLUMNS)
+        return frame.map(lambda v: None if isinstance(v, str) and not v.strip() else v)
 
     def _coerce_numeric(self) -> None:
         """Coerce every present ``NUMERIC_COLUMNS`` entry; bad values become NaN."""

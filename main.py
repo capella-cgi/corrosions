@@ -4,8 +4,9 @@ Mirrors ``file-index.ipynb``: load the index (leaving out ``--skip-years``),
 fix filenames, copy the existing files into ``<output_dir>/raw_data``, then
 write one report per data type to ``<output_dir>/checked-cips.xlsx`` /
 ``checked-pcm.xlsx``, and the index as JSON to ``<output_dir>/file_index.json``.
-Finally ``SyncData`` puts each segment's CIPS and PCM JSON in the same
-direction (rewriting them in place) and writes ``<output_dir>/sync-report.xlsx``.
+``to_json`` also syncs each segment's CIPS and PCM files to the same
+direction (rewriting the normalized JSON and Excel in place); its report goes
+to ``<output_dir>/sync-report.xlsx``.
 
 Example:
     uv run main.py                     # check both CIPS and PCM, skip 2021
@@ -20,7 +21,6 @@ import argparse
 
 import pandas as pd
 
-from corrosions.sync import SyncData
 from corrosions.data.file_index import FileIndex
 from corrosions.utils.path_utils import resolve_output_dir
 
@@ -119,24 +119,29 @@ def main() -> None:
         checked = fi.check_pcm_file(data_dir=data_dir, n_jobs=args.n_jobs)
         save_report(checked, os.path.join(output_dir, "checked-pcm.xlsx"))
 
-    index_json = fi.to_json(output_dir)
+    # to_json() also syncs the CIPS/PCM direction, unless --no-sync.
+    index_json = fi.to_json(output_dir, sync=not args.no_sync, n_jobs=args.n_jobs)
     print(f"Index JSON -> {index_json}")
     print(
         "Rows left out (no normalized CIPS/PCM file) -> "
         f"{os.path.join(output_dir, FileIndex.EXCLUDED_JSON_FILENAME)}"
     )
 
-    if not args.no_sync:
-        sync_index(index_json, os.path.join(output_dir, "sync-report.xlsx"))
+    if fi.sync_report is not None:
+        save_sync_report(fi.sync_report, os.path.join(output_dir, "sync-report.xlsx"))
 
 
-def sync_index(index_json: str, report_path: str) -> None:
-    """Sync CIPS/PCM survey direction and write the per-segment report.
+def save_sync_report(report: pd.DataFrame, report_path: str) -> None:
+    """Write the per-segment sync report and print a summary.
 
-    Only the segments in ``index_json`` are synced, i.e. those with both a
-    normalized CIPS and PCM file; with ``--type cips`` / ``pcm`` there are none.
+    Rows are sorted by ``start_gap_m``, largest first (skipped segments last),
+    so the CIPS/PCM pairs whose start points are furthest apart come first;
+    the report has the full JSON/Excel paths of both files to inspect them.
+
+    Only the segments in ``file_index.json`` are synced, i.e. those with both
+    a normalized CIPS and PCM file; with ``--type cips`` / ``pcm`` there are none.
     """
-    report = SyncData(index_json, verbose=True).sync()
+    report = report.sort_values("start_gap_m", ascending=False, na_position="last")
     report.to_excel(report_path, index=False)
 
     far = int((report["start_gap_m"] > 200).sum())

@@ -125,6 +125,7 @@ the referenced files.
 | `checked` | `bool` | `True` after `check_existing_file()` has been run. |
 | `fixed` | `bool` | `True` after `fix()` has been run. |
 | `skip_years` | `list[int]` | Survey years removed from `df` at load time (sorted, deduplicated). |
+| `sync_report` | `pd.DataFrame \| None` | `SyncData` report from the last `to_json(sync=True)`; `None` until then. |
 | `verbose` | `bool` | If `True`, `fix()` emits progress messages. |
 
 #### `__init__(filepath, drop_columns=None, skip_years=None, verbose=False)`
@@ -287,7 +288,7 @@ each result and merged into `df` by row afterwards.
 | `normalized_cips_file` | Filename of the normalized JSON; empty when cleaning or normalizing failed. |
 | `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning or normalizing fails (prefixed `clean failed:` / `normalize failed:`). |
 
-#### `to_json(output_dir: str | None = None) -> str`
+#### `to_json(output_dir: str | None = None, sync: bool = True, n_jobs: int = 1) -> str`
 
 Write the index as JSON records to `<output_dir>/file_index.json`
 (`JSON_FILENAME`; `output_dir` defaults to `<cwd>/output`) and return the
@@ -308,6 +309,13 @@ same keys minus `id`, plus:
 Why a file was not normalized is in the `check_cips_file` / `check_pcm_file`
 report (`reason`). Both files are always written, possibly as `[]`.
 
+With `sync=True` (the default), [`SyncData`](#corrosionssync) then runs on the
+written index: the normalized CIPS and PCM files of every kept segment (JSON
+and Excel, under `<cwd>/output/normalize`) are reordered in place so both
+surveys start at the same end. The per-segment report is stored on
+`sync_report`. Pass `sync=False` to leave the normalized files as they are.
+`n_jobs` runs the sync segments in parallel (`-1` for all cores).
+
 | Key | Source |
 | --- | --- |
 | `id` | Position among the written records, `0..n-1`. |
@@ -324,6 +332,7 @@ report (`reason`). Both files are always written, possibly as `[]`.
 index.check_cips_file("output/raw_data", n_jobs=-1)
 index.check_pcm_file("output/raw_data", n_jobs=-1)
 index.to_json()   # "output/file_index.json" (+ "output/file_index_excluded.json")
+index.sync_report[index.sync_report["start_gap_m"] > 200]
 ```
 
 #### `save(output_dir: str | None = None) -> None`
@@ -368,6 +377,7 @@ before `clean()` to check the raw data and after to check the cleaned data.
 | `REQUIRED_COLUMNS` | `list[str]` | Columns expected in the source Excel, checked by `check()`. |
 | `NUMERIC_COLUMNS` | `list[str]` | Columns coerced with `pd.to_numeric(..., errors="coerce")` at load time. |
 | `CLEAN_REQUIRED_COLUMNS` | `list[str]` | Columns whose non-NaN value is required for a row to survive `clean()`. |
+| `JSON_COLUMNS` | `dict[str, str]` | Subclasses with `normalize()`: the `df` columns written to the normalized JSON, in order, mapped to their JSON keys. Used by `json_frame()`. |
 | `UNIQUE_COLUMNS` | `tuple[str, str]` | The (latitude, longitude) pair. `check()` counts rows sharing a pair; `clean()` drops rows where either is `0` and keeps the first row of each pair. |
 
 #### Instance attributes
@@ -404,6 +414,15 @@ column names (as `get_sheet_columns` does), and coerce every
 - **`verbose`** *(bool)* — enables progress logging.
 - **Raises** `FileNotFoundError` if `filepath` does not exist, or
   `ValueError` if `find_sheet` finds no usable sheet.
+
+#### `json_frame(df) -> pd.DataFrame` *(classmethod)*
+
+Return `df` as it is written to the normalized JSON: only `JSON_COLUMNS`, in
+their order, renamed to their JSON keys, with empty or blank text turned into
+`None` (`null`). Used by `CIPS.normalize()` / `PCM.normalize()` and by
+[`SyncData`](#corrosionssync) to rebuild the JSON from a reversed normalized
+Excel. `CIPS.JSON_COLUMNS` and `PCM.JSON_COLUMNS` hold the mappings listed in
+their `normalize()` sections.
 
 #### `find_sheet(filepath: str) -> int | str` *(classmethod)*
 
@@ -505,7 +524,7 @@ leaves in it are fine.
 | File | Content |
 | --- | --- |
 | `normalize_excel_filepath` = `<output_dir>/normalize/pcm/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
-| `normalize_json_filepath` = `<output_dir>/normalize/pcm/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `int_gps_latitude`, `int_gps_longitude`, `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` (from `Comment (0-100)`). `Distance` is not in the JSON. Empty cells, including blank text, are `null`. |
+| `normalize_json_filepath` = `<output_dir>/normalize/pcm/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `latitude`, `longitude` (from `Int GPS Latitude` / `Longitude`, same keys as CIPS), `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` (from `Comment (0-100)`). `Distance` is not in the JSON. Empty cells, including blank text, are `null`. |
 
 Very short GPS steps inflate `Current Loss Rate`: on the 2022–2025 data,
 steps under 3 m (0.3% of rows) have a median rate of 490–3,900 against 32
@@ -662,57 +681,107 @@ Put the CIPS and PCM surveys of each segment in the same direction. Surveys
 of one pipeline are often walked in opposite directions (e.g. PCM east to
 west, CIPS west to east). `SyncData` reads the index written by
 [`FileIndex.to_json`](#to_jsonoutput_dir-str--none--none---str) and reorders
-the normalized JSON files **in place** so both surveys start at the same end:
+the normalized JSON **and Excel** files **in place** so both surveys start at
+the same end:
 
-1. **CIPS starts at its west end**: it is reversed when its first reading is
-   east of its last one.
-2. **PCM follows CIPS**: it is reversed when its last reading is closer than
-   its first one to the (synced) CIPS start. This keeps the pair together on
-   north-south lines, where the longitudes of the two ends barely differ.
+1. **CIPS starts by the main direction of its line** (`START`): an
+   east-west line starts at its **west** end, a north-south line at its
+   **north** end. The line is east-west when its two ends are further apart
+   east-west than north-south (`cips_axis` in the report).
+2. **PCM follows CIPS**: it is reversed when its last end is closer than its
+   first end to the (synced) CIPS start, so the pair always agrees.
 
-A reversed file gets `real_distance` recomputed (running total of the
-distance between consecutive readings). A reversed PCM file also gets
-`current_loss_rate` and `condition` recomputed with
+Each **end** is the average of the first / last `END_READINGS` (5) readings,
+or of half the survey when it is shorter, so one bad GPS fix at an end
+cannot flip the decision.
+
+`FileIndex.to_json()` runs it by default. The decision is made on the
+JSON. A reversed survey is recalculated **once, on its normalized Excel**
+(`.../excel/<year>-<slug>.xlsx`, full-precision coordinates, `normalize()`'s
+column names): `Distance` and `Real Distance`, and for PCM `Current Loss Rate`
+and `Condition` with
 [`PCM.current_loss`](#current_lossdbma-distance---tuplepdseries-pdseries-staticmethod),
-because both depend on the previous reading. Files already in order are not
-rewritten. The rule gives the same order every time, so running `sync()`
-again changes nothing.
+because both depend on the previous reading. The JSON is then rebuilt from
+that Excel with `json_frame` (the survey's `JSON_COLUMNS`, as `normalize()`
+writes it), so both files carry the same values (the JSON rounded to 10
+decimal places by `to_json`). Files already in order are not rewritten and
+their Excel is not read.
+
+**Safe writes:** every file of a segment is read and reversed, then written
+to a uniquely named temporary file next to it; only when all of them are
+written are they moved over the originals (`os.replace`). A segment that
+fails at any point (e.g. its Excel is missing, lacks the survey's
+`JSON_COLUMNS` / PCM `REQUIRED_COLUMNS`, or a write fails) is left untouched,
+with no temporary file left behind. The unique names also keep parallel
+workers apart when two segments share a file.
+
+Segments run in parallel with `n_jobs` (joblib `loky`). The rule gives the
+same order every time, so running `sync()` again changes nothing.
 
 | Attribute | Description |
 | --- | --- |
 | `REQUIRED_KEYS` | Keys every index record must have: `year`, `area`, `area_code`, `segment`, `segment_code`, `pipe_diameter`, `length`, `cips_protection`, `normalized_cips_file`, `normalized_pcm_file`. |
-| `COORDINATES` | Latitude/longitude keys per kind: CIPS `latitude` / `longitude`, PCM `int_gps_latitude` / `int_gps_longitude`. |
+| `COORDINATES` | JSON latitude/longitude keys per kind: `latitude` / `longitude` for both CIPS and PCM. |
+| `EXCEL_COORDINATES` | Excel latitude/longitude columns: CIPS `Latitude` / `Longitude`, PCM `PCM.UNIQUE_COLUMNS` (`Int GPS Latitude` / `Longitude`). |
+| `SURVEYS` | Survey class per kind (`CIPS`, `PCM`); its `json_frame` rebuilds the JSON. |
+| `EXCEL_REQUIRED_COLUMNS` | Columns an Excel must have to be reversed: the survey's `JSON_COLUMNS`, plus `PCM.REQUIRED_COLUMNS` for PCM. |
+| `EXCEL_COLUMNS` | Excel names of the order-dependent values: `Distance`, `Real Distance`, `dbma`, `Current Loss Rate`, `Condition`. |
+| `END_READINGS` | Readings averaged at each end of a survey (`5`). |
+| `START` | Where a CIPS survey starts, by line direction: `{"east-west": "west", "north-south": "north"}`. Set to `"east"` / `"south"` to flip. |
+| `REPORT_COLUMNS` | Columns of the `sync()` report, in order. |
 | `data` | Records of the index JSON. |
-| `normalize_dir` | Root of the normalized files, `<normalize_dir>/<cips\|pcm>/json/<file>`. |
+| `normalize_dir` | Root of the normalized files, `<normalize_dir>/<cips\|pcm>/<json\|excel>/<file>`. |
+| `n_jobs` | Parallel workers for `sync()`. |
 | `report` | DataFrame from the last `sync()` call. |
 
-#### `__init__(json_file_index, normalize_dir=None, verbose=False)`
+#### `__init__(json_file_index, normalize_dir=None, n_jobs=1, verbose=False)`
 
 Load `file_index.json` and check every record has `REQUIRED_KEYS`.
 `normalize_dir` defaults to `<cwd>/output/normalize`, where
-`CIPS.normalize()` / `PCM.normalize()` write. Raises `FileNotFoundError` if
-the index is missing and `KeyError` naming the first record that misses
-keys.
+`CIPS.normalize()` / `PCM.normalize()` write. `n_jobs` sets the parallel
+workers for `sync()` (`-1` for all cores). Raises `FileNotFoundError` if the
+index is missing and `KeyError` naming the first record that misses keys.
+
+#### `ends(df, lat, lon) -> tuple[Point, Point]` *(classmethod)*
+
+Return the first and last end of a survey as `(lat, lon)` points, each the
+mean of `END_READINGS` readings (or half the survey when shorter).
+
+#### `cips_direction(first, last) -> tuple[str, bool]` *(classmethod)*
+
+Return the main direction of a CIPS line (`"east-west"` or
+`"north-south"`, east-west on a tie) and whether it must be reversed to start
+at `START[axis]`.
 
 #### `sync() -> pd.DataFrame`
 
-Sync every segment and return one report row per index record:
+Sync every segment and return one report row per index record
+(`REPORT_COLUMNS`):
 
 | Column | Description |
 | --- | --- |
-| `segment_code`, `normalized_cips_file`, `normalized_pcm_file` | From the index record. |
-| `cips_reversed`, `pcm_reversed` | Whether that file was reversed and rewritten. |
-| `start_gap_m` | Meters between the CIPS and PCM start after syncing. A large gap means the two files do not cover the same stretch (or have bad coordinates). |
-| `reason` | Why a segment was skipped (missing, unreadable or empty file); empty when synced. Other segments still run. |
+| `year`, `area`, `segment_code` | From the index record. |
+| `start_gap_m` | Meters between the CIPS and PCM start ends after syncing. A large gap means the two files do not cover the same stretch, or one of them belongs to another segment. |
+| `cips_axis` | `east-west` or `north-south`, the main direction of the CIPS line. |
+| `cips_reversed`, `pcm_reversed` | Whether that survey was reversed and rewritten (JSON and Excel). |
+| `reason` | Why a segment was skipped (missing, unreadable or empty file, missing keys/columns, missing Excel, `write failed: ...`); empty when synced. Other segments still run. |
+| `normalized_cips_file`, `normalized_pcm_file` | From the index record. |
+| `cips_json_path`, `pcm_json_path`, `cips_excel_path`, `pcm_excel_path` | Full paths of the four files, also for skipped segments. |
 
-On the 2022-2025 data: 182 segments, 82 CIPS and 76 PCM files reversed,
-median `start_gap_m` 15 m, but 27 segments above 200 m (up to 86.6 km),
-which are worth checking in the index.
+On the 2022-2025 data (182 segments, `n_jobs=-1`): the sync took 14 s,
+0 errors. 92 lines are east-west and 90 north-south. 71 CIPS (37 east-west,
+34 north-south) and 73 PCM surveys reversed. 34 segments have `start_gap_m`
+above 200 m. Some of them are partial coverage (the surveys touch, but PCM
+covers only part of the CIPS line); others point to the wrong file in the
+index, e.g. `16-in-bitung-1-valve-gantung-kawasan-olex-16` (2022, 86.6 km:
+its CIPS file is the Karawang Pindodeli II survey, also used by
+`16-in-pindodeli-ii-kiic-16`) and `serpong-batu-ceper-16` (2024, 12.1 km: its
+PCM file is the Batu Ceper - Bitung survey).
 
 ```python
 from corrosions.sync import SyncData
 
-report = SyncData("output/file_index.json", verbose=True).sync()
+report = SyncData("output/file_index.json", n_jobs=8, verbose=True).sync()
 report[report["start_gap_m"] > 200]   # CIPS/PCM pairs that do not line up
 ```
 

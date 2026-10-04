@@ -20,6 +20,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 from slugify import slugify
 
+from corrosions.sync import SyncData
 from corrosions.logging import logger
 from corrosions.data.pcm import PCM
 from corrosions.data.cips import CIPS
@@ -48,6 +49,8 @@ class FileIndex:
         checked (bool): Whether ``check_existing_file()`` has been run.
         fixed (bool): Whether ``fix()`` has been run.
         skip_years (list[int]): Survey years removed from ``df`` at load time.
+        sync_report (pd.DataFrame | None): ``SyncData`` report from the last
+            ``to_json(sync=True)`` call; ``None`` until then.
         verbose (bool): If True, emit progress messages via the logger.
 
     Example:
@@ -134,6 +137,7 @@ class FileIndex:
         self.checked: bool = False
         self.fixed: bool = False
         self.verbose = verbose
+        self.sync_report: pd.DataFrame | None = None
         self.validate()
 
         self.df["Year"] = self.df["Year"].astype(int)
@@ -714,7 +718,9 @@ class FileIndex:
             )
         self.df = df
 
-    def to_json(self, output_dir: str | None = None) -> str:
+    def to_json(
+        self, output_dir: str | None = None, sync: bool = True, n_jobs: int = 1
+    ) -> str:
         """Write the index as JSON records to ``<output_dir>/file_index.json``.
 
         Runs ``fix()`` first if needed, so empty ``Segment`` values are filled
@@ -747,9 +753,20 @@ class FileIndex:
         Empty values are written as ``null``. Both files are always written,
         possibly as ``[]``.
 
+        With ``sync`` (the default), ``corrosions.sync.SyncData`` then runs on
+        the written index: every kept segment's normalized CIPS and PCM files
+        (JSON and Excel, under ``<cwd>/output/normalize``) are reordered in
+        place so both surveys start at the same end. Its per-segment report is
+        stored on ``self.sync_report``.
+
         Args:
             output_dir (str | None): Destination directory. Defaults to
                 ``<cwd>/output``.
+            sync (bool): Run ``SyncData`` after writing the index. Defaults to
+                ``True``; pass ``False`` to leave the normalized files as they
+                are.
+            n_jobs (int): Parallel workers for ``SyncData`` (joblib ``loky``);
+                ``-1`` uses all cores. Defaults to ``1``.
 
         Returns:
             str: Path of ``file_index.json``. The excluded rows are next to it,
@@ -760,6 +777,7 @@ class FileIndex:
             >>> index.check_pcm_file("output/raw_data", n_jobs=-1)
             >>> index.to_json()
             'output/file_index.json'
+            >>> index.sync_report["pcm_reversed"].sum()
         """
         if not self.fixed:
             self.fix()
@@ -810,6 +828,11 @@ class FileIndex:
                 f"{len(excluded)} rows without a normalized CIPS/PCM file to "
                 f"{excluded_filepath}"
             )
+
+        if sync:
+            self.sync_report = SyncData(
+                filepath, n_jobs=n_jobs, verbose=self.verbose
+            ).sync()
 
         return filepath
 

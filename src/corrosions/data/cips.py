@@ -90,6 +90,19 @@ class CIPS(BaseData):
         "Sequential Files",
     ]
 
+    # normalize() writes these columns, in this order, to the JSON under
+    # these keys (see BaseData.json_frame).
+    JSON_COLUMNS: dict[str, str] = {
+        "Voltage": "voltage",
+        "Off Voltage": "off_voltage",
+        "Latitude": "latitude",
+        "Longitude": "longitude",
+        "Real Distance": "real_distance",
+        "Condition": "condition",
+        "Comment": "comment",
+        "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
+    }
+
     # Applied by ``fix``. Other voltage columns (``-mV On``, ``Potential (-mV)``,
     # ``On Potential (mV)``, ...) are left untouched.
     RENAME_COLUMNS: dict[str, str] = {
@@ -364,33 +377,9 @@ class CIPS(BaseData):
 
         self.df = df
 
-        json_selected_columns = [
-            "Voltage",
-            "Off Voltage",
-            "Latitude",
-            "Longitude",
-            "Real Distance",
-            "Condition",
-            "Comment",
-            "DCP/Feature/DCVG Anomaly",
-        ]
-
-        columns_mapping = {
-            "Voltage": "voltage",
-            "Off Voltage": "off_voltage",
-            "Latitude": "latitude",
-            "Longitude": "longitude",
-            "Real Distance": "real_distance",
-            "Condition": "condition",
-            "Comment": "comment",
-            "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
-        }
-
-        # Save to JSON with modified column name. Empty or blank text cells
-        # (e.g. the "" Comment added by fix) become null, like empty numbers.
-        df = df[json_selected_columns]
-        df = df.rename(columns=columns_mapping)
-        df = df.map(lambda v: None if isinstance(v, str) and not v.strip() else v)
+        # Save to JSON (JSON_COLUMNS). Empty or blank text cells (e.g. the ""
+        # Comment added by fix) become null, like empty numbers.
+        df = self.json_frame(df)
         os.makedirs(self.normalize_json_dir, exist_ok=True)
         df.to_json(self.normalize_json_filepath, orient="records")
 

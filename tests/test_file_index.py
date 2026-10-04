@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from corrosions.data.cips import CIPS
+from corrosions.data.pcm import PCM
 from corrosions.data.file_index import FileIndex
 
 
@@ -286,8 +287,10 @@ def test_to_json(tmp_path):
     out = tmp_path / "out"
 
     # before check_cips_file / check_pcm_file every row is excluded
-    path = index.to_json(str(out))
+    # sync=False: the normalized files named below do not exist
+    path = index.to_json(str(out), sync=False)
     assert path == os.path.join(str(out), "file_index.json")
+    assert index.sync_report is None
     records, excluded = _read_index_json(path)
     assert records == []
     assert len(excluded) == 4
@@ -297,7 +300,7 @@ def test_to_json(tmp_path):
     index.df["normalized_cips_file"] = ["c1.json", "c2.json", "c3.json", None]
     index.df["normalized_pcm_file"] = ["p1.json", "p2.json", None, None]
 
-    records, excluded = _read_index_json(index.to_json(str(out)))
+    records, excluded = _read_index_json(index.to_json(str(out), sync=False))
     assert records == [
         {
             "id": 0,
@@ -540,3 +543,49 @@ def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
     assert excluded[0]["normalized_pcm_file"] == "2025-pcm-01-good.json"
     assert excluded[0]["missing"] == ["normalized_cips_file"]
     assert excluded[3]["pcm_file"] is None
+
+
+def test_to_json_syncs_the_normalized_files(tmp_path, monkeypatch):
+    # CIPS/PCM normalize() and SyncData both use <cwd>/output/normalize
+    monkeypatch.chdir(tmp_path)
+    east_to_west = [106.102, 106.101, 106.100]
+    pd.DataFrame(
+        {
+            "Latitude": [-6.1] * 3,
+            "Longitude": east_to_west,
+            "Comment": [""] * 3,
+            "DCP/Feature/DCVG Anomaly": [""] * 3,
+            "On Voltage": [-1.0, -1.1, -0.8],
+            "Off Voltage": [-0.9, -0.95, -0.7],
+        }
+    ).to_excel(tmp_path / "CIPS - ICCP a.xlsx", index=False)
+    pd.DataFrame(
+        {
+            "4Hz Current (A)": [0.5, 0.45, 0.2],
+            "Int GPS Latitude": [-6.1] * 3,
+            "Int GPS Longitude": east_to_west,
+            "Comment (0-100)": ["TP 1", None, None],
+            "Gain (dB)": [30] * 3,
+            "Depth (m)": [1.2] * 3,
+        }
+    ).to_excel(tmp_path / "PCM a.xlsx", index=False)
+    cips = CIPS(str(tmp_path / "CIPS - ICCP a.xlsx"), year=2024).clean().normalize()
+    pcm = PCM(str(tmp_path / "PCM a.xlsx"), year=2024).clean().normalize()
+
+    index_path = tmp_path / "index.xlsx"
+    _write_value_index(index_path, [{"Segment": "Seg A"}])
+    index = FileIndex(str(index_path))
+    # what check_cips_file / check_pcm_file would merge into df
+    index.df["cips_protection"] = ["ICCP"]
+    index.df["normalized_cips_file"] = [os.path.basename(cips.normalize_json_filepath)]
+    index.df["normalized_pcm_file"] = [os.path.basename(pcm.normalize_json_filepath)]
+
+    index.to_json(str(tmp_path / "out"))
+
+    report = index.sync_report
+    assert report is not None
+    assert report.iloc[0]["cips_reversed"] and report.iloc[0]["pcm_reversed"]
+    with open(cips.normalize_json_filepath, encoding="utf-8") as f:
+        assert json.load(f)[0]["longitude"] == 106.1  # now starts at the west end
+    excel = pd.read_excel(pcm.normalize_excel_filepath)
+    assert excel["Int GPS Longitude"].iloc[0] == 106.1
