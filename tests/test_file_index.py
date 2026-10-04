@@ -315,6 +315,7 @@ def test_to_json(tmp_path):
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
+            "province_code": 31,
             "name": "Pipa Servis Indonesia Power",  # filled from Sub Segment
             "code": "pipa-servis-indonesia-power-16",
             "diameter": 16,
@@ -333,6 +334,7 @@ def test_to_json(tmp_path):
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
+            "province_code": 31,
             "name": "RE Martadinata",
             "code": "re-martadinata-10-5",
             "diameter": 10.5,
@@ -359,6 +361,7 @@ def test_to_json(tmp_path):
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
+            "province_code": 31,
             "name": "Third",
             "code": "third-8",
             "diameter": 8,
@@ -380,6 +383,7 @@ def test_to_json(tmp_path):
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
+            "province_code": 31,
             "name": "Fourth",
             "code": "fourth-8",
             "diameter": 8,
@@ -667,3 +671,73 @@ def test_assign_acvg_dcvg_updates_the_written_json(tmp_path):
     # later to_json calls write it from df, the same way
     rewritten, _ = _read_index_json(index.to_json(str(out), sync=False))
     assert rewritten == records
+
+
+def test_area_records_summarize_per_area_code():
+    segment = {
+        "year": 2025,
+        "area": "Jakarta",
+        "area_code": "jakarta-2025",
+        "province_code": 31,
+    }
+    records = [
+        {**segment, "pipe_length": 1.75, "protected": 80.0, "unprotected": 20.0,
+         "medium_to_poor": 10.0, "medium_to_high": 90.0, "total_anomaly": 3},
+        {**segment, "pipe_length": 2.0, "protected": 66.67, "unprotected": 33.33,
+         "medium_to_poor": 25.5, "medium_to_high": 74.5, "total_anomaly": None},
+        {"year": 2024, "area": "Bogor", "area_code": "bogor-2024",
+         "province_code": 32, "pipe_length": 0.5, "protected": None,
+         "unprotected": None, "medium_to_poor": 0.0, "medium_to_high": 100.0,
+         "total_anomaly": 2},
+    ]
+
+    assert FileIndex.area_records(records) == [
+        {
+            "name": "Jakarta",
+            "code": "jakarta-2025",
+            "year": 2025,
+            "total_length": 3.75,
+            # simple mean of the segments, 2 decimals
+            "protected": 73.34,  # (80 + 66.67) / 2 = 73.335
+            "unprotected": 26.66,
+            "medium_to_poor": 17.75,
+            "medium_to_high": 82.25,
+            "total_anomaly": 3,  # null counts as 0
+            "province_code": 31,
+        },
+        {
+            "name": "Bogor",
+            "code": "bogor-2024",
+            "year": 2024,
+            "total_length": 0.5,
+            "protected": None,  # no value to average
+            "unprotected": None,
+            "medium_to_poor": 0.0,
+            "medium_to_high": 100.0,
+            "total_anomaly": 2,
+            "province_code": 32,
+        },
+    ]
+
+
+def test_area_json_is_written_and_follows_assign_acvg_dcvg(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(path, [{"Segment": "One"}, {"Segment": "Two"}])
+    index = FileIndex(str(path))
+    index.df["normalized_cips_file"] = ["c1.json", "c2.json"]
+    index.df["normalized_pcm_file"] = ["p1.json", "p2.json"]
+    index.df["cips_protected_percentage"] = [80.0, 60.0]
+    index.df["cips_unprotected_percentage"] = [20.0, 40.0]
+    out = tmp_path / "out"
+    index.to_json(str(out), sync=False)
+
+    with open(out / FileIndex.AREA_JSON_FILENAME, encoding="utf-8") as f:
+        (area,) = json.load(f)
+    assert (area["code"], area["total_length"]) == ("a-2024", 2.0)
+    assert (area["protected"], area["total_anomaly"]) == (70.0, 0)
+
+    # the counts arrive after to_json: area.json is rebuilt with them
+    index.assign_acvg_dcvg({0: "a.json", 1: "b.json"}, str(out), counts={0: 4, 1: 5})
+    with open(out / FileIndex.AREA_JSON_FILENAME, encoding="utf-8") as f:
+        (area,) = json.load(f)
+    assert area["total_anomaly"] == 9

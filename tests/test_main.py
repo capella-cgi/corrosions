@@ -147,6 +147,10 @@ def test_full_run_includes_acvg_dcvg(project, monkeypatch, capsys):
     # added after the ACVG/DCVG step
     assert record["acvg_dcvg_normalized_file"] == "2024-acvg-dcvg-seg-a-16-jakarta.json"
     assert record["total_anomaly"] == 1
+    with open(out / "area.json", encoding="utf-8") as f:
+        (area,) = json.load(f)
+    assert area["code"] == "jakarta-2024"
+    assert (area["total_anomaly"], area["protected"]) == (1, 100.0)
 
     # ACVG/DCVG: one file per segment, named after the index row
     acvg_file = out / "raw_data" / "2024" / "ACVG_DCVG" / "acvg-dcvg-seg-a-16-jakarta.xlsx"

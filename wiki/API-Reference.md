@@ -317,6 +317,10 @@ same keys, plus:
 Why a file was not normalized is in the `check_cips_file` / `check_pcm_file`
 report (`reason`). Both files are always written, possibly as `[]`.
 
+`<output_dir>/area.json` (`AREA_JSON_FILENAME`) is written next to them:
+one summary per `area_code` of the `file_index.json` records, see
+[`area_records`](#area_recordsrecords---listdict).
+
 With `sync=True` (the default), [`SyncData`](#corrosionssync) then runs on the
 written index: the normalized CIPS and PCM files of every kept segment (JSON
 and Excel, under `<cwd>/output/normalize`) are reordered in place so both
@@ -328,6 +332,7 @@ surveys start at the same end. The per-segment report is stored on
 | --- | --- |
 | `year`, `area` | `Year`, `Area`. |
 | `area_code` | Slug of `<area>-<year>`, e.g. `jakarta-2025`. |
+| `province_code` | `Province Code`. |
 | `name` | `Segment`. |
 | `code` | Slug of `<name>-<diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
 | `diameter` | `Diameter`, as an int when whole (`16`, not `16.0`). |
@@ -346,6 +351,20 @@ index.to_json()   # "output/file_index.json" (+ "output/file_index_excluded.json
 index.sync_report[index.sync_report["start_gap_m"] > 200]
 ```
 
+#### `area_records(records) -> list[dict]`
+
+Class method: summarize `file_index.json` records per `area_code` (written
+to `area.json` by `to_json`, and rebuilt by `assign_acvg_dcvg`). One record
+per area, in order of first appearance:
+
+| Key | Value |
+| --- | --- |
+| `name` / `code` / `year` | `area` / `area_code` / `year`. |
+| `total_length` | Sum of `pipe_length` (3 decimals, to drop float noise). |
+| `protected`, `unprotected`, `medium_to_poor`, `medium_to_high` | Simple mean of the segments' percentages (every segment counts the same), 2 decimals; `null` values skipped, `null` when all are. |
+| `total_anomaly` | Sum of the segments' `total_anomaly` (`null` = 0), int. |
+| `province_code` | Of the first segment of the area. |
+
 #### `assign_acvg_dcvg(files, output_dir=None, counts=None) -> Self`
 
 Add the normalized ACVG/DCVG file and the anomaly count of each row. `files`
@@ -360,7 +379,7 @@ write them. The ACVG/DCVG step runs after `to_json` (its `normalize` needs
 the synced CIPS), so `file_index.json` and `file_index_excluded.json` in
 `output_dir` are also updated in place: every record, found by `year` +
 `code`, gets `acvg_dcvg_normalized_file` and `total_anomaly` (`null` without
-a file), in the same key order as `to_json` records (the order comes from
+a file; `area.json` is rebuilt from the result), in the same key order as `to_json` records (the order comes from
 `_record`; the excluded file's `cips_file`, `pcm_file`, `missing` stay
 last). Missing JSON files are skipped; nothing is synced again.
 

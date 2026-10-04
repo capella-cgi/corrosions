@@ -40,6 +40,8 @@ class FileIndex:
         DATA_TYPES (tuple[str, str]): Data-type identifiers used to locate files on disk.
         JSON_FILENAME (str): Index JSON written by ``to_json``.
         EXCLUDED_JSON_FILENAME (str): JSON of the rows ``to_json`` left out.
+        AREA_JSON_FILENAME (str): Per-area summary of ``JSON_FILENAME`` (see
+            ``area_records``).
         NORMALIZED_FILE_KEYS (tuple[str, str]): Keys a row needs to be kept
             by ``to_json``.
         ACVG_DCVG_FILE_KEY (str): JSON key of the normalized ACVG/DCVG file
@@ -84,6 +86,15 @@ class FileIndex:
     # Written by to_json() under its output_dir.
     JSON_FILENAME: str = "file_index.json"
     EXCLUDED_JSON_FILENAME: str = "file_index_excluded.json"
+    AREA_JSON_FILENAME: str = "area.json"
+
+    # area.json: mean of these segment percentages per area, 2 decimals.
+    AREA_MEAN_KEYS: tuple[str, ...] = (
+        "protected",
+        "unprotected",
+        "medium_to_poor",
+        "medium_to_high",
+    )
 
     # A row goes into JSON_FILENAME only when all of these are set.
     NORMALIZED_FILE_KEYS: tuple[str, str] = (
@@ -787,6 +798,7 @@ class FileIndex:
         - ``year`` (int), ``area`` (str).
         - ``area_code`` (str): slug of ``<area>-<year>``, e.g.
           ``"jakarta-2025"``.
+        - ``province_code`` (int): ``Province Code``.
         - ``name`` (str): ``Segment``.
         - ``code`` (str): slug of ``<name>-<diameter>``, e.g.
           ``"pipa-servis-indonesia-power-16"``.
@@ -819,7 +831,9 @@ class FileIndex:
           they ran, and for rows without a usable file.
 
         Empty values are written as ``null``. Both files are always written,
-        possibly as ``[]``.
+        possibly as ``[]``. Then ``<output_dir>/area.json``
+        (``AREA_JSON_FILENAME``) is written from the ``file_index.json``
+        records, one per ``area_code`` (see ``area_records``).
 
         With ``sync`` (the default), ``corrosions.sync.SyncData`` then runs on
         the written index: every kept segment's normalized CIPS and PCM files
@@ -871,7 +885,12 @@ class FileIndex:
         output_dir = resolve_output_dir(output_dir)
         filepath = os.path.join(output_dir, self.JSON_FILENAME)
         excluded_filepath = os.path.join(output_dir, self.EXCLUDED_JSON_FILENAME)
-        for path, data in ((filepath, records), (excluded_filepath, excluded)):
+        area_filepath = os.path.join(output_dir, self.AREA_JSON_FILENAME)
+        for path, data in (
+            (filepath, records),
+            (excluded_filepath, excluded),
+            (area_filepath, self.area_records(records)),
+        ):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
 
@@ -895,10 +914,13 @@ class FileIndex:
         area = _json_value(row["Area"])
         segment = _json_value(row["Segment"])
         diameter = _json_value(row["Diameter"], whole_as_int=True)
+        province_code = _json_value(row["Province Code"])
+
         return {
             "year": year,
             "area": area,
             "area_code": slugify(f"{area}-{year}"),
+            "province_code": province_code,
             "name": segment,
             "code": (slugify(f"{segment}-{diameter}") if segment else None),
             "diameter": diameter,
@@ -915,6 +937,58 @@ class FileIndex:
             "cips_normalized_file": _json_value(row.get("normalized_cips_file")),
             "pcm_normalized_file": _json_value(row.get("normalized_pcm_file")),
         }
+
+    @classmethod
+    def area_records(cls, records: list[dict]) -> list[dict]:
+        """Summarize ``file_index.json`` records per ``area_code``.
+
+        One record per ``area_code``, in order of first appearance:
+
+        - ``name``: ``area``; ``code``: ``area_code``; ``year``.
+        - ``total_length``: sum of ``pipe_length`` (rounded to 3 decimals,
+          only to drop float noise).
+        - ``protected``, ``unprotected``, ``medium_to_poor``,
+          ``medium_to_high`` (``AREA_MEAN_KEYS``): simple mean of the
+          segments' percentages (every segment counts the same), rounded to
+          2 decimals; ``null`` values are skipped, ``null`` when all are.
+        - ``total_anomaly``: sum of the segments' ``total_anomaly`` (``null``
+          counts as 0), as an int.
+        - ``province_code``: of the first segment of the area.
+
+        Args:
+            records (list[dict]): ``file_index.json`` records.
+
+        Returns:
+            list[dict]: One summary per area.
+
+        Example:
+            >>> FileIndex.area_records(records)[0]["total_length"]
+            12.35
+        """
+        areas: dict[str, list[dict]] = {}
+        for record in records:
+            areas.setdefault(record.get("area_code"), []).append(record)
+
+        summaries = []
+        for code, segments in areas.items():
+            first = segments[0]
+            summary = {
+                "name": first.get("area"),
+                "code": code,
+                "year": first.get("year"),
+                "total_length": round(
+                    sum(s.get("pipe_length") or 0.0 for s in segments), 3
+                ),
+            }
+            for key in cls.AREA_MEAN_KEYS:
+                values = [s[key] for s in segments if s.get(key) is not None]
+                summary[key] = round(sum(values) / len(values), 2) if values else None
+            summary["total_anomaly"] = int(
+                sum(s.get(cls.TOTAL_ANOMALY_KEY) or 0 for s in segments)
+            )
+            summary["province_code"] = first.get("province_code")
+            summaries.append(summary)
+        return summaries
 
     def assign_acvg_dcvg(
         self,
@@ -934,6 +1008,8 @@ class FileIndex:
         same key order as ``to_json`` records. Keys only the excluded file has
         (``cips_file``, ``pcm_file``, ``missing``) stay last. A JSON file that
         does not exist is skipped. The CIPS/PCM files are not synced again.
+        ``area.json`` is then rebuilt from the updated ``file_index.json``,
+        so its ``total_anomaly`` counts the anomalies too.
 
         Args:
             files (dict[int, str]): Row position in ``df`` (= row of the index
@@ -1002,6 +1078,12 @@ class FileIndex:
             ]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=4, ensure_ascii=False)
+            if name == self.JSON_FILENAME:
+                area_path = os.path.join(output_dir, self.AREA_JSON_FILENAME)
+                with open(area_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        self.area_records(records), f, indent=4, ensure_ascii=False
+                    )
 
         if self.verbose:
             linked = sum(
