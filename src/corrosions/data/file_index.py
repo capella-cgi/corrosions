@@ -417,11 +417,18 @@ class FileIndex:
         return self
 
     def check_pcm_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
-        """Run PCM data-quality checks on every referenced PCM file.
+        """Check, clean, save and normalize every referenced PCM file.
 
         Each file runs through ``PCM(...).clean().save().check()``, so the
         cleaned copy is written under ``output/cleaned/<year>/PCM/`` and the
-        report describes the cleaned data.
+        report describes the cleaned data. Then ``normalize()`` writes the
+        normalized Excel/JSON under ``<cwd>/output/normalize/pcm/``; a file
+        that fails to normalize keeps its check columns.
+
+        Also adds ``normalized_pcm_file`` to ``df`` (filename of the
+        normalized JSON, ``PCM.normalize_json_filepath``), used by
+        ``to_json``. It is ``None`` for rows without a PCM file, or whose file
+        failed to load, clean or normalize.
 
         Args:
             data_dir (str): Root directory containing the year-partitioned data files.
@@ -431,17 +438,20 @@ class FileIndex:
 
         Returns:
             pd.DataFrame: One row per index entry with columns ``year``,
-                ``filepath``, ``is_valid``, ``reason``, ``n_missing``,
-                ``n_duplicates``, ``missing_columns``, and ``duplicates``. Rows
-                with a missing filename, a missing file on disk, or a load
-                error are recorded as ``is_valid=False`` with a populated
-                ``reason``.
+                ``filepath``, ``is_valid``, ``n_missing``, ``n_duplicates``,
+                ``missing_columns``, ``duplicates``, ``normalized``
+                (``PCM.normalized``), ``normalized_pcm_file`` and ``reason``.
+                Rows with a missing file on disk, a load/clean error or a
+                normalize error are recorded as ``is_valid=False`` with a
+                populated ``reason``.
         """
         empty_result = {
             "n_missing": None,
             "n_duplicates": None,
             "missing_columns": None,
             "duplicates": None,
+            "normalized": False,
+            "normalized_pcm_file": None,
         }
 
         def _check_row(row: pd.Series) -> dict:
@@ -458,7 +468,6 @@ class FileIndex:
 
             try:
                 pcm = PCM(filepath, year=year).clean().save().check()
-                return {"year": year, **pcm.report, "reason": None}
             except Exception as e:
                 return {
                     "year": year,
@@ -468,9 +477,42 @@ class FileIndex:
                     **empty_result,
                 }
 
+            result = {
+                "year": year,
+                **pcm.report,
+                "normalized": False,
+                "normalized_pcm_file": None,
+                "reason": None,
+            }
+
+            try:
+                pcm.normalize()
+            except Exception as e:
+                result["is_valid"] = False
+                result["reason"] = f"normalize failed: {type(e).__name__}: {e}"
+                return result
+
+            # pcm lives in this worker process: send its state back in result
+            result["normalized"] = pcm.normalized
+            if pcm.normalized:
+                result["normalized_pcm_file"] = os.path.basename(
+                    pcm.normalize_json_filepath
+                )
+            return result
+
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["PCM"])]
         results = Parallel(n_jobs=n_jobs, backend="loky")(
             delayed(_check_row)(row) for row in rows
+        )
+
+        self._merge_results(
+            rows,
+            {
+                "normalized_pcm_file": [
+                    result["normalized_pcm_file"] if result["normalized"] else None
+                    for result in results
+                ]
+            },
         )
 
         columns = [
@@ -481,6 +523,8 @@ class FileIndex:
             "n_duplicates",
             "missing_columns",
             "duplicates",
+            "normalized",
+            "normalized_pcm_file",
             "reason",
         ]
 
@@ -618,23 +662,43 @@ class FileIndex:
             delayed(_check_row)(row) for row in rows
         )
 
-        # Workers run in separate processes and cannot update self.df, so
-        # their results are merged back here by row label (row.name). Only
-        # files that were actually normalized get a normalized_cips_file.
-        merged = {
-            "normalized_cips_file": [
-                result.get("normalized_cips_file") if result.get("normalized") else None
-                for result in results
-            ],
-            "cips_protection": [result.get("cips_protection") for result in results],
-        }
-        df = self.df.copy()
-        labels = [row.name for row in rows]
-        for column, values in merged.items():
-            df[column] = pd.Series(values, index=labels, dtype=object).reindex(df.index)
-        self.df = df
+        # Only files that were actually normalized get a normalized_cips_file.
+        self._merge_results(
+            rows,
+            {
+                "normalized_cips_file": [
+                    result.get("normalized_cips_file")
+                    if result.get("normalized")
+                    else None
+                    for result in results
+                ],
+                "cips_protection": [
+                    result.get("cips_protection") for result in results
+                ],
+            },
+        )
 
         return pd.DataFrame(results, columns=columns)
+
+    def _merge_results(self, rows: list[pd.Series], values: dict[str, list]) -> None:
+        """Write per-file worker results into new ``df`` columns.
+
+        Workers run in separate processes and cannot update ``self.df``, so
+        each value comes back in the worker's result and is written here by
+        row label (``row.name``). Rows that were not processed get ``NaN``.
+
+        Args:
+            rows (list[pd.Series]): The ``df`` rows sent to the workers.
+            values (dict[str, list]): Column name -> one value per row, in the
+                order of ``rows``.
+        """
+        df = self.df.copy()
+        labels = [row.name for row in rows]
+        for column, column_values in values.items():
+            df[column] = pd.Series(column_values, index=labels, dtype=object).reindex(
+                df.index
+            )
+        self.df = df
 
     def to_json(self, output_dir: str | None = None) -> str:
         """Write the index as JSON records to ``<output_dir>/file_index.json``.
@@ -654,6 +718,8 @@ class FileIndex:
         - ``cips_protection`` (str | None) and ``normalized_cips_file``
           (str | None): set by ``check_cips_file``; ``None`` until it ran,
           and for rows without a usable CIPS file.
+        - ``normalized_pcm_file`` (str | None): set by ``check_pcm_file``;
+          ``None`` until it ran, and for rows without a usable PCM file.
 
         Empty values are written as ``null``.
 
@@ -694,6 +760,7 @@ class FileIndex:
                     "normalized_cips_file": _json_value(
                         row.get("normalized_cips_file")
                     ),
+                    "normalized_pcm_file": _json_value(row.get("normalized_pcm_file")),
                 }
             )
 

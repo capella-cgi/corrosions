@@ -1,4 +1,11 @@
+import os
+from typing import Self
+
+import numpy as np
+import pandas as pd
+
 from corrosions.data.base_data import BaseData
+from corrosions.utils.geo_utils import calculate_distance
 
 
 class PCM(BaseData):
@@ -7,7 +14,8 @@ class PCM(BaseData):
     PCM surveys are performed to determine the coating integrity of underground
     gas pipelines. This class loads a single PCM Excel export, coerces its
     numeric columns, and inherits the fluent ``check`` / ``clean`` / ``save``
-    pipeline from ``BaseData``.
+    pipeline from ``BaseData``. ``normalize`` adds the current-loss analysis
+    and writes the normalized Excel/JSON.
 
     Attributes:
         REQUIRED_COLUMNS (list[str]): Required columns expected in the source Excel.
@@ -22,7 +30,7 @@ class PCM(BaseData):
 
     Example:
         >>> pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024)
-        >>> pcm.check().clean().save()
+        >>> pcm.check().clean().save().normalize()
         >>> pcm.report["is_valid"]
         True
     """
@@ -30,22 +38,20 @@ class PCM(BaseData):
     KIND = "pcm"
 
     REQUIRED_COLUMNS: list[str] = [
-        "Index",
         "4Hz Current (A)",
         "Int GPS Latitude",
         "Int GPS Longitude",
-        "Ext GPS Latitude",
-        "Ext GPS Longitude",
-        "Survey name (0-100)",
+        "Comment (0-100)",
         "Gain (dB)",
+        "Depth (m)",
     ]
 
     NUMERIC_COLUMNS: list[str] = [
-        "Index",
         "4Hz Current (A)",
         "Int GPS Latitude",
         "Int GPS Longitude",
         "Gain (dB)",
+        "Depth (m)",
     ]
 
     CLEAN_REQUIRED_COLUMNS: list[str] = [
@@ -56,3 +62,119 @@ class PCM(BaseData):
     ]
 
     UNIQUE_COLUMNS: tuple[str, str] = ("Int GPS Latitude", "Int GPS Longitude")
+
+    def normalize(self) -> Self:
+        """Add current-loss analysis, then save Excel and JSON.
+
+        Adds to ``self.df``:
+
+        - ``Distance``: meters from the previous reading (``0`` for the
+          first), from the ``Int GPS`` coordinates, as in ``CIPS.normalize``.
+          It replaces the ``Distance`` column some exports already have.
+        - ``Real Distance``: running total of ``Distance``, in meters.
+        - ``dbma``: ``20 * log10(4Hz Current (A) * 1000)``, rounded to 2
+          decimals. Empty when the current is ``<= 0`` (log is undefined).
+        - ``Current Loss Rate``: ``|Δdbma / Δdistance| * 1000`` between a
+          reading and the previous one, rounded to 2 decimals; ``0`` for the
+          first reading. Empty when either ``dbma`` is empty.
+        - ``Condition``: ``"Medium to High"`` when ``Current Loss Rate <= 50``,
+          otherwise ``"Medium to Poor"``, including when the rate is empty
+          (no ``dbma``).
+
+        Then writes two files and sets ``self.normalized``:
+
+        - ``normalize_excel_filepath``
+          (``<output_dir>/normalize/pcm/excel/<year>-<slug>.xlsx``): ``self.df``
+          with its original column names, without the index.
+        - ``normalize_json_filepath``
+          (``<output_dir>/normalize/pcm/json/<year>-<slug>.json``): one record
+          per row with only these keys, in this order: ``int_gps_latitude``,
+          ``int_gps_longitude``, ``real_distance``, ``4hz_current_a``,
+          ``dbma``, ``current_loss_rate``, ``depth_m``, ``condition`` and
+          ``comment_0_100``. Empty cells, including blank text, are ``null``.
+
+        Rows are taken in their current order (previous row = row above). The
+        index is not used, so the gaps ``clean`` leaves in it are fine. Call
+        after ``clean``, which makes sure every coordinate is present and
+        deduplicated.
+
+        Returns:
+            Self: ``self``, to allow method chaining.
+
+        Raises:
+            RuntimeError: If ``clean`` has not completed yet.
+            ValueError: If a column ``normalize`` reads is missing
+                (``Int GPS Latitude`` / ``Longitude``, ``4Hz Current (A)``,
+                ``Depth (m)``, ``Comment (0-100)``).
+
+        Example:
+            >>> pcm = PCM("segment.xlsx", year=2024).clean().normalize()
+            >>> pcm.df["Condition"].value_counts()
+            >>> pcm.normalize_json_filepath
+            'output/normalize/pcm/json/2024-segment.json'
+        """
+        if not self.cleaned:
+            raise RuntimeError(f"Run clean() before normalize(): {self.filepath}")
+
+        needed = [
+            "Int GPS Latitude",
+            "Int GPS Longitude",
+            "4Hz Current (A)",
+            "Depth (m)",
+            "Comment (0-100)",
+        ]
+        missing = [c for c in needed if c not in self.df.columns]
+        if missing:
+            raise ValueError(f"Cannot normalize {self.filepath}: missing {missing}")
+
+        df = self.df.copy()
+
+        lat, lon = df["Int GPS Latitude"], df["Int GPS Longitude"]
+        distance = pd.Series(
+            calculate_distance(lat.shift(), lon.shift(), lat, lon), index=df.index
+        ).fillna(0.0)
+
+        df["Distance"] = distance
+        df["Real Distance"] = distance.cumsum()
+
+        # log10 is undefined for a current <= 0, so dbma is left empty there.
+        current = df["4Hz Current (A)"]
+        df["dbma"] = (20 * np.log10(current.where(current > 0) * 1000)).round(2)
+
+        delta_dbma = df["dbma"].diff()
+        current_loss_rate = ((delta_dbma / distance).abs() * 1000).round(2)
+        # 0 for the first reading (no previous one) and for a zero step.
+        df["Current Loss Rate"] = current_loss_rate.where(distance > 0, 0.0)
+
+        # An empty rate (no dbma) compares False, so it is "Medium to Poor".
+        df["Condition"] = np.where(
+            df["Current Loss Rate"] <= 50, "Medium to High", "Medium to Poor"
+        )
+
+        # Save to excel with original column name
+        os.makedirs(self.normalize_excel_dir, exist_ok=True)
+        df.to_excel(self.normalize_excel_filepath, index=False)
+
+        self.df = df
+
+        columns_mapping = {
+            "Int GPS Latitude": "int_gps_latitude",
+            "Int GPS Longitude": "int_gps_longitude",
+            "Real Distance": "real_distance",
+            "4Hz Current (A)": "4hz_current_a",
+            "dbma": "dbma",
+            "Current Loss Rate": "current_loss_rate",
+            "Depth (m)": "depth_m",
+            "Condition": "condition",
+            "Comment (0-100)": "comment_0_100",
+        }
+
+        # Save to JSON with modified column name; blank text becomes null.
+        df = df[list(columns_mapping)].rename(columns=columns_mapping)
+        df = df.map(lambda v: None if isinstance(v, str) and not v.strip() else v)
+        os.makedirs(self.normalize_json_dir, exist_ok=True)
+        df.to_json(self.normalize_json_filepath, orient="records")
+
+        self.normalized = True
+
+        return self

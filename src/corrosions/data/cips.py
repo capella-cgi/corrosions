@@ -120,7 +120,6 @@ class CIPS(BaseData):
         super().__init__(filepath, year, output_dir, verbose)
         self.protection: Literal["ICCP", "SACP"] = "ICCP"
         self.fixed: bool = False
-        self.cleaned: bool = False
 
     @classmethod
     def data_sheets(cls, sheet_columns: dict[str, list[str]]) -> list[str]:
@@ -274,7 +273,8 @@ class CIPS(BaseData):
         ``BaseData.clean`` drops all-empty rows, rows whose ``Latitude`` or
         ``Longitude`` is ``0`` or empty, rows with an empty ``Voltage``, and
         duplicate (``Latitude``, ``Longitude``) rows (first reading kept).
-        Sets ``self.cleaned`` once every step succeeded.
+        ``self.cleaned`` is set by ``BaseData.clean``, so only when every
+        step succeeded.
 
         Returns:
             Self: ``self``, to allow method chaining.
@@ -287,10 +287,7 @@ class CIPS(BaseData):
         self._fix_voltage()
         if self.protection == "ICCP":
             self.df = self.df.dropna(subset=self.ICCP_COLUMNS)
-        super().clean()
-        self.cleaned = True
-
-        return self
+        return super().clean()
 
     def normalize(self) -> Self:
         """Add distances and protection condition, then save Excel and JSON.

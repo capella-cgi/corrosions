@@ -26,8 +26,9 @@ def pcm_file(tmp_path):
             "Int GPS Longitude": [106.1, 106.2, np.nan, 106.3, 106.1],
             "Ext GPS Latitude": [np.nan] * 5,
             "Ext GPS Longitude": [np.nan] * 5,
-            "Survey name (0-100)": ["a", "b", np.nan, "c", "d"],
+            "Comment (0-100)": ["a", "b", np.nan, "c", "d"],
             "Gain (dB)": [10, 20, np.nan, 30, "bad"],
+            "Depth (m)": [1.0, 1.1, np.nan, 1.2, 1.3],
         },
     )
 
@@ -54,8 +55,10 @@ def test_pcm_check_missing_columns(tmp_path):
         {"Int GPS Latitude": [-6.1], "Int GPS Longitude": [106.1]},
     )
     report = PCM(path, year=2024, output_dir=str(tmp_path / "out")).check().report
-    assert report["n_missing"] == 6
+    assert report["n_missing"] == 4
     assert "Gain (dB)" in report["missing_columns"]
+    assert "Depth (m)" in report["missing_columns"]
+    assert "Index" not in report["missing_columns"]
 
 
 def test_pcm_clean_drops_incomplete_rows(pcm_file, tmp_path):
@@ -556,3 +559,119 @@ def test_normalize_filename_drops_extension(tmp_path):
     stem = "2024-cips-sacp-segmen-bks-10-inch-a-b-4-9-km"
     assert os.path.basename(cips.normalize_excel_filepath) == f"{stem}.xlsx"
     assert os.path.basename(cips.normalize_json_filepath) == f"{stem}.json"
+
+
+def _pcm_track(currents: list[float], latitudes: list[float] | None = None) -> dict:
+    n = len(currents)
+    latitudes = latitudes or [-6.1 - i * 0.001 for i in range(n)]
+    return {
+        "Index": list(range(1, n + 1)),
+        "4Hz Current (A)": currents,
+        "Int GPS Latitude": latitudes,
+        "Int GPS Longitude": [106.1] * n,
+        "Comment (0-100)": ["TP 1"] + [None] * (n - 1),
+        "Gain (dB)": [30] * n,
+        "Depth (m)": [1.2] * n,
+    }
+
+
+def test_pcm_normalize_current_loss_and_condition(tmp_path):
+    # 0.001 degree latitude apart -> ~111.195 m per step
+    path = _write_excel(tmp_path / "PCM 01 track.xlsx", _pcm_track([0.5, 0.45, 0.2]))
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean()
+    assert pcm.normalize() is pcm
+    df = pcm.df
+
+    # dbma = 20 * log10(current * 1000), rounded to 2 decimals
+    assert df["dbma"].tolist() == [53.98, 53.06, 46.02]
+    assert df["Distance"].tolist() == pytest.approx([0.0, 111.195, 111.195], abs=1e-3)
+    assert df["Real Distance"].tolist() == pytest.approx(
+        [0.0, 111.195, 222.390], abs=1e-3
+    )
+    # |delta dbma / distance| * 1000: 0.92 / 111.195 m and 7.04 / 111.195 m
+    assert df["Current Loss Rate"].tolist() == [0.0, 8.27, 63.31]
+    assert df["Condition"].tolist() == [
+        "Medium to High",
+        "Medium to High",
+        "Medium to Poor",
+    ]
+
+
+def test_pcm_normalize_replaces_source_distance_column(tmp_path):
+    # some exports have their own Distance; normalize() recomputes it from GPS
+    data = {**_pcm_track([0.5, 0.45]), "Distance": [0.0, 8.5]}
+    path = _write_excel(tmp_path / "PCM dist.xlsx", data)
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().normalize()
+    assert pcm.df["Distance"].tolist() == pytest.approx([0.0, 111.195], abs=1e-3)
+
+
+def test_pcm_normalize_non_positive_current(tmp_path):
+    path = _write_excel(tmp_path / "PCM zero.xlsx", _pcm_track([0.5, 0.0, 0.45, 0.44]))
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().normalize()
+    df = pcm.df
+    # log10 is undefined for current <= 0: that row and the next have no rate
+    assert pd.isna(df["dbma"].iloc[1])
+    assert df["Current Loss Rate"].isna().tolist() == [False, True, True, False]
+    # an empty rate counts as Medium to Poor
+    assert df["Condition"].tolist()[1:3] == ["Medium to Poor", "Medium to Poor"]
+    assert df["Condition"].iloc[3] == "Medium to High"
+
+
+def test_pcm_normalize_after_clean_leaves_index_gaps(tmp_path):
+    # row 1 duplicates row 0's coordinates and is dropped by clean()
+    data = _pcm_track([0.5, 0.5, 0.45], latitudes=[-6.1, -6.1, -6.101])
+    path = _write_excel(tmp_path / "PCM gaps.xlsx", data)
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean()
+    assert list(pcm.df.index) == [0, 2]
+    pcm.normalize()
+    assert pcm.df["Current Loss Rate"].tolist() == [0.0, 8.27]
+
+
+def test_pcm_normalize_saves_excel_and_json(tmp_path):
+    data = _pcm_track([0.5, 0.45])
+    data["Comment (0-100)"] = ["TP 1", "  "]
+    path = _write_excel(tmp_path / "PCM 01 JKT Pipa.xlsx", data)
+    out = tmp_path / "out"
+    pcm = PCM(path, year=2025, output_dir=str(out)).clean().normalize()
+    assert pcm.normalized is True
+
+    assert pcm.normalize_excel_filepath == str(
+        out / "normalize" / "pcm" / "excel" / "2025-pcm-01-jkt-pipa.xlsx"
+    )
+    excel = pd.read_excel(pcm.normalize_excel_filepath)
+    assert list(excel.columns) == list(pcm.df.columns)
+    assert "Unnamed: 0" not in excel.columns
+    assert {
+        "Distance",
+        "Real Distance",
+        "dbma",
+        "Current Loss Rate",
+        "Condition",
+    } <= set(excel.columns)
+
+    assert pcm.normalize_json_filepath == str(
+        out / "normalize" / "pcm" / "json" / "2025-pcm-01-jkt-pipa.json"
+    )
+    with open(pcm.normalize_json_filepath, encoding="utf-8") as f:
+        records = json.load(f)
+    assert list(records[0]) == [
+        "int_gps_latitude",
+        "int_gps_longitude",
+        "real_distance",
+        "4hz_current_a",
+        "dbma",
+        "current_loss_rate",
+        "depth_m",
+        "condition",
+        "comment_0_100",
+    ]
+    assert records[0]["comment_0_100"] == "TP 1"  # from Comment (0-100)
+    assert records[1]["comment_0_100"] is None  # blank text -> null
+    assert "distance" not in records[0]  # Distance stays out of the JSON
+    assert records[1]["current_loss_rate"] == 8.27
+
+
+def test_pcm_normalize_before_clean_raises(tmp_path):
+    path = _write_excel(tmp_path / "PCM raw.xlsx", _pcm_track([0.5, 0.45]))
+    with pytest.raises(RuntimeError, match="Run clean"):
+        PCM(path, year=2025, output_dir=str(tmp_path / "out")).normalize()

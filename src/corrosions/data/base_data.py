@@ -41,8 +41,9 @@ class BaseData:
             ``<slug>`` is the slugified source filename without its extension.
         normalize_json_filepath (str): JSON written by a subclass
             ``normalize``: ``<normalize_json_dir>/<year>-<slug>.json``.
+        cleaned (bool): True once ``clean`` completed; ``normalize`` requires
+            it.
         normalized (bool): True once a subclass ``normalize`` wrote both files.
-            Stays False for subclasses without ``normalize`` (``PCM``).
         report (dict): Summary from the last ``check`` call; empty until then.
         verbose (bool): If True, methods may emit progress messages.
     """
@@ -111,6 +112,7 @@ class BaseData:
         # Same normalization as get_sheet_columns, which find_sheet relies on.
         df.columns = [str(c).strip() for c in df.columns]
         self.df: pd.DataFrame = df
+        self.cleaned: bool = False
         self.normalized: bool = False
         self._coerce_numeric()
 
@@ -234,6 +236,8 @@ class BaseData:
 
         if len(coordinates) == len(self.UNIQUE_COLUMNS):
             self.df = self.df.drop_duplicates(subset=coordinates)
+
+        self.cleaned = True
 
         return self
 

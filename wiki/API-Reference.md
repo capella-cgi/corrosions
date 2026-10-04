@@ -225,7 +225,13 @@ Returns `self` for chaining.
 Run `PCM(...).clean().save().check()` on every referenced PCM file, in
 parallel via joblib's `loky` backend when `n_jobs > 1` (or `-1` for all
 cores). Each cleaned copy is written to `output/cleaned/<year>/PCM/`, and
-the report describes the cleaned data.
+the report describes the cleaned data. Then [`normalize()`](#normalize---self-1)
+writes the normalized Excel/JSON under `<cwd>/output/normalize/pcm/`; a file
+that fails to normalize keeps its check columns.
+
+It also adds `normalized_pcm_file` to `df` (filename of the normalized JSON),
+used by [`to_json`](#to_jsonoutput_dir-str--none--none---str). It is empty for
+rows without a PCM file, or whose file failed to load, clean or normalize.
 
 Returns a DataFrame with one row per index entry and columns:
 
@@ -238,7 +244,9 @@ Returns a DataFrame with one row per index entry and columns:
 | `n_duplicates` | Number of duplicate rows by `(Int GPS Latitude, Int GPS Longitude)`. |
 | `missing_columns` | Names of missing required columns. |
 | `duplicates` | Duplicate row records. |
-| `reason` | Populated when the row failed to load (missing file, exception, …). |
+| `normalized` | `True` once `normalize()` wrote the Excel and JSON (`PCM.normalized`); `False` otherwise. |
+| `normalized_pcm_file` | Filename of the normalized JSON; empty unless `normalized`. |
+| `reason` | Populated when the row failed to load (missing file, exception, …) or to normalize (prefixed `normalize failed:`). |
 
 #### `check_cips_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
@@ -295,6 +303,7 @@ Empty values are written as `null`.
 | `length` | `Length`, always a float (`2.0` stays `2.0`). |
 | `segment_code` | Slug of `<segment>-<pipe_diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
 | `cips_protection`, `normalized_cips_file` | Set by `check_cips_file`; `null` until it ran. |
+| `normalized_pcm_file` | Set by `check_pcm_file`; `null` until it ran. |
 
 ```python
 index.check_cips_file("output/raw_data", n_jobs=-1)
@@ -361,7 +370,8 @@ before `clean()` to check the raw data and after to check the cleaned data.
 | `normalize_json_dir` | `str` | `<normalize_dir>/json`. |
 | `normalize_excel_filepath` | `str` | Excel written by a subclass `normalize()`: `<normalize_excel_dir>/<year>-<slug>.xlsx` (`<slug>` = slugified source filename without its extension). |
 | `normalize_json_filepath` | `str` | JSON written by a subclass `normalize()`: `<normalize_json_dir>/<year>-<slug>.json`. |
-| `normalized` | `bool` | `True` once a subclass `normalize()` wrote both files. Stays `False` for subclasses without `normalize()` (`PCM`). |
+| `cleaned` | `bool` | `True` once `clean()` completed; `normalize()` requires it. |
+| `normalized` | `bool` | `True` once a subclass `normalize()` wrote both files. |
 | `report` | `dict` | Summary from the last `check()` call; empty until then. |
 | `verbose` | `bool` | If `True`, methods may emit progress messages. |
 
@@ -429,13 +439,14 @@ Write the current `df` to `<cleaned_dir>/<original_filename>`, creating
 ### `class PCM(BaseData)`
 
 Single-file Pipeline Current Mapping (PCM) survey reader. Inherits
-`check()` / `clean()` / `save()` from [`BaseData`](#corrosionsdatabase_data).
+`check()` / `clean()` / `save()` from [`BaseData`](#corrosionsdatabase_data)
+and adds `normalize()`.
 
 | Attribute | Value |
 | --- | --- |
 | `KIND` | `"pcm"` |
-| `REQUIRED_COLUMNS` | `Index`, `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Ext GPS Latitude`, `Ext GPS Longitude`, `Survey name (0-100)`, `Gain (dB)` |
-| `NUMERIC_COLUMNS` | `Index`, `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Gain (dB)` |
+| `REQUIRED_COLUMNS` | `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Comment (0-100)`, `Gain (dB)`, `Depth (m)` |
+| `NUMERIC_COLUMNS` | `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Gain (dB)`, `Depth (m)` |
 | `CLEAN_REQUIRED_COLUMNS` | `4Hz Current (A)`, `Int GPS Latitude`, `Int GPS Longitude`, `Gain (dB)` (Ext GPS columns are excluded because they are frequently blank) |
 | `UNIQUE_COLUMNS` | `("Int GPS Latitude", "Int GPS Longitude")` |
 
@@ -445,6 +456,39 @@ from corrosions.data.pcm import PCM
 pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024).check().clean().save()
 pcm.report["is_valid"]   # quality of the raw data
 pcm.cleaned_path         # "output/cleaned/2024/PCM/segment-01.xlsx"
+```
+
+#### `normalize() -> Self`
+
+Add the current-loss analysis to `df`, then save it as Excel and JSON.
+Requires a completed `clean()` (`RuntimeError` otherwise) and raises
+`ValueError` if a column it reads is missing (`Int GPS Latitude` /
+`Longitude`, `4Hz Current (A)`, `Depth (m)`, `Comment (0-100)`).
+
+| Added column | Description |
+| --- | --- |
+| `Distance` | Meters from the previous reading (`0` for the first), from the `Int GPS` coordinates, as in CIPS. Replaces the `Distance` column some exports already have. |
+| `Real Distance` | Running total of `Distance`, in meters. |
+| `dbma` | `20 * log10(4Hz Current (A) * 1000)`, rounded to 2 decimals. Empty when the current is `<= 0` (log undefined). |
+| `Current Loss Rate` | `abs(Δdbma / Δdistance) * 1000` between a reading and the previous one, rounded to 2 decimals; `0` for the first reading. Empty when either `dbma` is empty. |
+| `Condition` | `Medium to High` when `Current Loss Rate <= 50`, otherwise `Medium to Poor`, including when the rate is empty (no `dbma`). |
+
+"Previous" means the row above: the index is not used, so the gaps `clean()`
+leaves in it are fine.
+
+| File | Content |
+| --- | --- |
+| `normalize_excel_filepath` = `<output_dir>/normalize/pcm/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
+| `normalize_json_filepath` = `<output_dir>/normalize/pcm/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `int_gps_latitude`, `int_gps_longitude`, `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` (from `Comment (0-100)`). `Distance` is not in the JSON. Empty cells, including blank text, are `null`. |
+
+Very short GPS steps inflate `Current Loss Rate`: on the 2022–2025 data,
+steps under 3 m (0.3% of rows) have a median rate of 490–3,900 against 32
+for steps of 10 m or more.
+
+```python
+pcm = PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize()
+pcm.df["Condition"].value_counts()
+pcm.normalize_json_filepath   # "output/normalize/pcm/json/2025-segment-01.json"
 ```
 
 ---
@@ -479,8 +523,8 @@ cips.protection           # "ICCP" or "SACP"
 | `RENAME_COLUMNS` | `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage` |
 
 Extra instance attributes: `protection` (`"ICCP"` or `"SACP"`, set by
-`clean()`), `fixed` (`True` once `fix()` ran) and `cleaned` (`True` once
-`clean()` completed; `normalize()` requires it).
+`clean()`) and `fixed` (`True` once `fix()` ran). `cleaned` comes from
+`BaseData`.
 
 #### `data_sheets(sheet_columns: dict[str, list[str]]) -> list[str]` *(classmethod)*
 

@@ -285,6 +285,7 @@ def test_to_json(tmp_path):
             "segment_code": "pipa-servis-indonesia-power-16",
             "cips_protection": None,  # check_cips_file has not run
             "normalized_cips_file": None,
+            "normalized_pcm_file": None,  # check_pcm_file has not run
         },
         {
             "id": 1,
@@ -297,6 +298,7 @@ def test_to_json(tmp_path):
             "segment_code": "re-martadinata-10-5",
             "cips_protection": None,
             "normalized_cips_file": None,
+            "normalized_pcm_file": None,
         },
     ]
     # == cannot tell 16 from 16.0, so check the JSON types explicitly
@@ -417,3 +419,61 @@ def test_duplicates_in_skipped_years_are_ignored(tmp_path):
     with pytest.raises(ValueError, match=r"at Excel rows \[2, 3\]"):
         FileIndex(str(path), skip_years=[2024])
     assert len(FileIndex(str(path), skip_years=[2021]).df) == 1
+
+
+def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    os.makedirs(data_dir / "2025" / "PCM")
+    n = 3
+    pd.DataFrame(
+        {
+            "Index": list(range(1, n + 1)),
+            "4Hz Current (A)": [0.5, 0.45, 0.2],
+            "Int GPS Latitude": [-6.1, -6.101, -6.102],
+            "Int GPS Longitude": [106.1] * n,
+            "Comment (0-100)": ["S"] * n,
+            "Gain (dB)": [30] * n,
+            "Depth (m)": [1.2] * n,
+        }
+    ).to_excel(data_dir / "2025" / "PCM" / "PCM 01 good.xlsx", index=False)
+    pd.DataFrame({"Int GPS Latitude": [-6.1]}).to_excel(
+        data_dir / "2025" / "PCM" / "bad.xlsx", index=False
+    )
+
+    index_path = tmp_path / "index.xlsx"
+    _write_value_index(
+        index_path,
+        [
+            {"Year": 2025, "Segment": "A", "PCM": "PCM 01 good.xlsx"},
+            {"Year": 2025, "Segment": "B", "PCM": "bad.xlsx"},
+            {"Year": 2025, "Segment": "C", "PCM": "missing.xlsx"},
+            {"Year": 2025, "Segment": "D", "PCM": None},
+        ],
+    )
+    index = FileIndex(str(index_path))
+    report = index.check_pcm_file(str(data_dir), n_jobs=1)
+    report.index = [os.path.basename(p) for p in report["filepath"]]
+
+    assert report.loc["PCM 01 good.xlsx", "normalized"]
+    assert report.loc["PCM 01 good.xlsx", "normalized_pcm_file"] == "2025-pcm-01-good.json"
+    assert os.path.isfile(
+        tmp_path / "output" / "normalize" / "pcm" / "json" / "2025-pcm-01-good.json"
+    )
+    # clean() only uses the columns present, so bad.xlsx fails in normalize()
+    assert not report.loc["bad.xlsx", "normalized"]
+    assert report.loc["bad.xlsx", "reason"].startswith(
+        "normalize failed: ValueError: Cannot normalize"
+    )
+    assert "Int GPS Longitude" in report.loc["bad.xlsx", "reason"]
+    assert not report.loc["missing.xlsx", "normalized"]
+    assert report["normalized"].dtype == bool
+
+    assert index.df["normalized_pcm_file"].tolist()[0] == "2025-pcm-01-good.json"
+    assert index.df["normalized_pcm_file"].isna().tolist()[1:] == [True, True, True]
+
+    records = json.loads(
+        open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read()
+    )
+    assert records[0]["normalized_pcm_file"] == "2025-pcm-01-good.json"
+    assert records[3]["normalized_pcm_file"] is None

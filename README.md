@@ -25,10 +25,12 @@ report per data type:
   path in `cleaned_path`). A file that cannot be cleaned is marked invalid
   with a `clean failed: …` reason.
 - `checked-pcm.xlsx`: missing columns and duplicate GPS rows per file, after
-  cleaning (cleaned copies go to `output/cleaned/<year>/PCM/`).
+  cleaning (cleaned copies go to `output/cleaned/<year>/PCM/`). Each file
+  is then normalized (current loss in `dbma`, `Current Loss Rate`,
+  `Condition`) into `output/normalize/pcm/excel|json/`.
 - `file_index.json`: one record per index row (`year`, `area`, `area_code`,
   `segment`, `pipe_diameter`, `length`, `segment_code`, `cips_protection`,
-  `normalized_cips_file`). CIPS files are also normalized into
+  `normalized_cips_file`, `normalized_pcm_file`). CIPS files are also normalized into
   `output/normalize/cips/excel|json/`.
 
 Close the reports in Excel before rerunning; Windows locks open files.
