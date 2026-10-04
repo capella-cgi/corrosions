@@ -27,6 +27,11 @@ class PCM(BaseData):
             frequently blank in real PCM exports.
         UNIQUE_COLUMNS (tuple[str, str]): Columns whose combination must be
             unique across rows (used by ``check`` to flag duplicates).
+        medium_to_high_percentage (float): Share of readings whose
+            ``Condition`` is ``Medium to High``, in percent; set by
+            ``normalize`` (``0.0`` before).
+        medium_to_poor_percentage (float): ``100 - medium_to_high_percentage``,
+            the ``Medium to Poor`` share.
 
     Example:
         >>> pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024)
@@ -76,6 +81,32 @@ class PCM(BaseData):
         "Condition": "condition",
         "Comment (0-100)": "comment_0_100",
     }
+
+    def __init__(
+        self,
+        filepath: str,
+        year: int,
+        output_dir: str | None = None,
+        verbose: bool = False,
+    ):
+        """Load a PCM Excel file and coerce numeric columns.
+
+        Args:
+            filepath (str): Path to the source PCM Excel file.
+            year (int): Survey year for this file.
+            output_dir (str | None): Destination root for downstream artifacts.
+                Defaults to ``<cwd>/output`` via ``resolve_output_dir``.
+            verbose (bool): If True, methods may emit progress messages.
+                Defaults to ``False``.
+
+        Raises:
+            FileNotFoundError: If ``filepath`` does not exist.
+        """
+        super().__init__(filepath, year, output_dir, verbose)
+
+        # Share of readings (0-100) per Condition, set by normalize().
+        self.medium_to_poor_percentage: float = 0.0
+        self.medium_to_high_percentage: float = 0.0
 
     @staticmethod
     def current_loss(
@@ -128,6 +159,12 @@ class PCM(BaseData):
         - ``Condition``: ``"Medium to High"`` when ``Current Loss Rate <= 50``,
           otherwise ``"Medium to Poor"``, including when the rate is empty
           (no ``dbma``).
+
+        Sets ``self.medium_to_high_percentage`` (share of ``Medium to High``
+        readings, in percent, rounded to 2 decimals) and
+        ``self.medium_to_poor_percentage`` (``100 -`` that). Reversing the
+        survey (``SyncData``) keeps the same reading pairs, so it does not
+        change them.
 
         Then writes two files and sets ``self.normalized``:
 
@@ -193,6 +230,11 @@ class PCM(BaseData):
         df["Current Loss Rate"], df["Condition"] = self.current_loss(
             df["dbma"], distance
         )
+
+        # clean() leaves at least one row; every reading has one of the two
+        high = int((df["Condition"] == "Medium to High").sum())
+        self.medium_to_high_percentage = round(100 * high / len(df), 2)
+        self.medium_to_poor_percentage = round(100 - self.medium_to_high_percentage, 2)
 
         # Save to excel with original column name
         os.makedirs(self.normalize_excel_dir, exist_ok=True)

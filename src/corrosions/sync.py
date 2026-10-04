@@ -86,13 +86,13 @@ class SyncData:
         "year",
         "area",
         "area_code",
-        "segment",
-        "segment_code",
-        "pipe_diameter",
-        "length",
+        "name",
+        "code",
+        "diameter",
+        "pipe_length",
         "cips_protection",
-        "normalized_cips_file",
-        "normalized_pcm_file",
+        "cips_normalized_file",
+        "pcm_normalized_file",
     )
 
     COORDINATES: dict[str, tuple[str, str]] = {
@@ -193,7 +193,7 @@ class SyncData:
 
         Raises:
             KeyError: Naming the first record (by position and
-                ``segment_code``) that misses keys, and the missing keys.
+                ``code``) that misses keys, and the missing keys.
 
         Example:
             >>> sync.validate()
@@ -203,7 +203,7 @@ class SyncData:
             if missing:
                 raise KeyError(
                     f"{self.json_file_index}: record {position} "
-                    f"({record.get('segment_code')!r}) misses keys {missing}"
+                    f"({record.get('code')!r}) misses keys {missing}"
                 )
 
     def json_path(self, kind: str, filename: str) -> str:
@@ -212,7 +212,7 @@ class SyncData:
         Args:
             kind (str): ``"cips"`` or ``"pcm"``.
             filename (str): Filename from the index
-                (``normalized_cips_file`` / ``normalized_pcm_file``).
+                (``cips_normalized_file`` / ``pcm_normalized_file``).
 
         Returns:
             str: ``<normalize_dir>/<kind>/json/<filename>``.
@@ -345,13 +345,14 @@ class SyncData:
     def _sync_record(self, record: dict) -> dict:
         """Sync the CIPS and PCM files of one index record."""
         row = dict.fromkeys(self.REPORT_COLUMNS)
-        cips_name = record["normalized_cips_file"]
-        pcm_name = record["normalized_pcm_file"]
+        cips_name = record["cips_normalized_file"]
+        pcm_name = record["pcm_normalized_file"]
         row.update(
             {
                 "year": record["year"],
                 "area": record["area"],
-                "segment_code": record["segment_code"],
+                # report column keeps its name; the index key is "code"
+                "segment_code": record["code"],
                 "cips_reversed": False,
                 "pcm_reversed": False,
                 "normalized_cips_file": cips_name,
@@ -365,8 +366,8 @@ class SyncData:
         )
 
         try:
-            cips_file = record["normalized_cips_file"]
-            pcm_file = record["normalized_pcm_file"]
+            cips_file = record["cips_normalized_file"]
+            pcm_file = record["pcm_normalized_file"]
             cips = self._read_json(self.json_path("cips", cips_file), "cips")
             pcm = self._read_json(self.json_path("pcm", pcm_file), "pcm")
 
@@ -412,7 +413,7 @@ class SyncData:
 
         if self.verbose and (cips_reverse or pcm_reverse):
             logger.info(
-                f"{record['segment_code']}: reversed "
+                f"{record['code']}: reversed "
                 f"CIPS={cips_reverse} ({axis}) PCM={pcm_reverse}"
             )
 

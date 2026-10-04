@@ -6,7 +6,7 @@ referenced files into a year-partitioned output directory.
 
 Example:
     >>> from corrosions.data.file_index import FileIndex
-    >>> index = FileIndex("IDDA - File List.xlsx")
+    >>> index = FileIndex("IDDA - PCM CIPS File List.xlsx")
     >>> index.rebuild(source_dir="//nas/surveys")
     >>> index.save()
 """
@@ -42,6 +42,13 @@ class FileIndex:
         EXCLUDED_JSON_FILENAME (str): JSON of the rows ``to_json`` left out.
         NORMALIZED_FILE_KEYS (tuple[str, str]): Keys a row needs to be kept
             by ``to_json``.
+        ACVG_DCVG_FILE_KEY (str): JSON key of the normalized ACVG/DCVG file
+            (optional; set by ``assign_acvg_dcvg``).
+        ACVG_DCVG_COLUMN (str): ``df`` column behind ``ACVG_DCVG_FILE_KEY``.
+        TOTAL_ANOMALY_KEY (str): JSON key of the number of ACVG/DCVG
+            anomalies (optional; set by ``assign_acvg_dcvg``).
+        TOTAL_ANOMALY_COLUMN (str): ``df`` column behind
+            ``TOTAL_ANOMALY_KEY``.
         filepath (str): Path to the source Excel file.
         filename (str): Base filename of the source Excel file.
         filename_slug (str): Slugified filename stem, used for output artifacts.
@@ -54,7 +61,7 @@ class FileIndex:
         verbose (bool): If True, emit progress messages via the logger.
 
     Example:
-        >>> index = FileIndex("IDDA - File List.xlsx", verbose=True)
+        >>> index = FileIndex("IDDA - PCM CIPS File List.xlsx", verbose=True)
         >>> index.rebuild(source_dir="//nas/surveys", destination_dir="data")
         >>> index.save()
     """
@@ -80,9 +87,15 @@ class FileIndex:
 
     # A row goes into JSON_FILENAME only when all of these are set.
     NORMALIZED_FILE_KEYS: tuple[str, str] = (
-        "normalized_cips_file",
-        "normalized_pcm_file",
+        "cips_normalized_file",
+        "pcm_normalized_file",
     )
+
+    # Optional: most rows have no ACVG/DCVG survey (see assign_acvg_dcvg).
+    ACVG_DCVG_FILE_KEY: str = "acvg_dcvg_normalized_file"
+    ACVG_DCVG_COLUMN: str = "normalized_acvg_dcvg_file"
+    TOTAL_ANOMALY_KEY: str = "total_anomaly"
+    TOTAL_ANOMALY_COLUMN: str = "acvg_dcvg_total_anomaly"
 
     def __init__(
         self,
@@ -116,8 +129,8 @@ class FileIndex:
                 not unique (see ``validate_values``).
 
         Example:
-            >>> index = FileIndex("IDDA - File List.xlsx", drop_columns="Notes")
-            >>> index = FileIndex("IDDA - File List.xlsx", skip_years=[2021])
+            >>> index = FileIndex("IDDA - PCM CIPS File List.xlsx", drop_columns="Notes")
+            >>> index = FileIndex("IDDA - PCM CIPS File List.xlsx", skip_years=[2021])
         """
         self.filepath = filepath
 
@@ -185,7 +198,7 @@ class FileIndex:
           ``Sub Segment`` on its own may be empty.
         - The segment after that fill (``Segment``, else ``Sub Segment``)
           together with ``Diameter`` must be unique, so every row gets its
-          own ``segment_code`` in ``to_json``. The same route with two
+          own ``code`` in ``to_json``. The same route with two
           diameters (e.g. 16 and 10 inch) is two different pipes and allowed.
 
         Text is compared with surrounding whitespace stripped, and blank text
@@ -444,8 +457,10 @@ class FileIndex:
         that fails to normalize keeps its check columns.
 
         Also adds ``normalized_pcm_file`` to ``df`` (filename of the
-        normalized JSON, ``PCM.normalize_json_filepath``), used by
-        ``to_json``. It is ``None`` for rows without a PCM file, or whose file
+        normalized JSON, ``PCM.normalize_json_filepath``) and
+        ``pcm_medium_to_poor`` / ``pcm_medium_to_high``
+        (``PCM.medium_to_poor_percentage`` / ``medium_to_high_percentage``),
+        used by ``to_json``. It is ``None`` for rows without a PCM file, or whose file
         failed to load, clean or normalize.
 
         Args:
@@ -458,7 +473,9 @@ class FileIndex:
             pd.DataFrame: One row per index entry with columns ``year``,
                 ``filepath``, ``is_valid``, ``n_missing``, ``n_duplicates``,
                 ``missing_columns``, ``duplicates``, ``normalized``
-                (``PCM.normalized``), ``normalized_pcm_file`` and ``reason``.
+                (``PCM.normalized``), ``normalized_pcm_file``,
+                ``medium_to_poor_percentage``, ``medium_to_high_percentage``
+                and ``reason``.
                 Rows with a missing file on disk, a load/clean error or a
                 normalize error are recorded as ``is_valid=False`` with a
                 populated ``reason``.
@@ -470,6 +487,8 @@ class FileIndex:
             "duplicates": None,
             "normalized": False,
             "normalized_pcm_file": None,
+            "medium_to_poor_percentage": None,
+            "medium_to_high_percentage": None,
         }
 
         def _check_row(row: pd.Series) -> dict:
@@ -500,6 +519,8 @@ class FileIndex:
                 **pcm.report,
                 "normalized": False,
                 "normalized_pcm_file": None,
+                "medium_to_poor_percentage": None,
+                "medium_to_high_percentage": None,
                 "reason": None,
             }
 
@@ -516,6 +537,8 @@ class FileIndex:
                 result["normalized_pcm_file"] = os.path.basename(
                     pcm.normalize_json_filepath
                 )
+                result["medium_to_poor_percentage"] = pcm.medium_to_poor_percentage
+                result["medium_to_high_percentage"] = pcm.medium_to_high_percentage
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["PCM"])]
@@ -529,7 +552,13 @@ class FileIndex:
                 "normalized_pcm_file": [
                     result["normalized_pcm_file"] if result["normalized"] else None
                     for result in results
-                ]
+                ],
+                "pcm_medium_to_poor": [
+                    result["medium_to_poor_percentage"] for result in results
+                ],
+                "pcm_medium_to_high": [
+                    result["medium_to_high_percentage"] for result in results
+                ],
             },
         )
 
@@ -543,6 +572,8 @@ class FileIndex:
             "duplicates",
             "normalized",
             "normalized_pcm_file",
+            "medium_to_poor_percentage",
+            "medium_to_high_percentage",
             "reason",
         ]
 
@@ -566,6 +597,10 @@ class FileIndex:
         - ``normalized_cips_file``: filename of the normalized JSON
           (``CIPS.normalize_json_filepath``).
         - ``cips_protection``: ``"ICCP"`` or ``"SACP"``.
+        - ``cips_protected_percentage`` / ``cips_unprotected_percentage``:
+          ``CIPS.protected_percentage`` / ``unprotected_percentage``, share
+          of readings that are (over) protected / unprotected (only set when
+          normalized).
 
         Args:
             data_dir (str): Root directory containing the year-partitioned
@@ -580,8 +615,10 @@ class FileIndex:
                 (sheet loaded), ``candidate_sheets`` (every qualifying sheet,
                 best first), ``has_voltage``, ``n_missing``,
                 ``missing_columns``, ``n_duplicates``, ``cleaned_path``,
-                ``cips_protection``, ``normalized`` (``CIPS.normalized``),
-                ``normalized_cips_file`` and ``reason``.
+                ``cips_protection``, ``protected_percentage``,
+                ``unprotected_percentage``, ``normalized``
+                (``CIPS.normalized``), ``normalized_cips_file`` and
+                ``reason``.
                 Check columns describe the file before cleaning.
                 The per-row duplicate list is left out: CIPS files can repeat
                 thousands of GPS points, too many for an Excel cell, and
@@ -610,6 +647,8 @@ class FileIndex:
             "n_duplicates",
             "cleaned_path",
             "cips_protection",
+            "protected_percentage",
+            "unprotected_percentage",
             "normalized",
             "normalized_cips_file",
             "reason",
@@ -645,6 +684,8 @@ class FileIndex:
                 "candidate_sheets": candidates,
                 "cleaned_path": None,
                 "cips_protection": None,
+                "protected_percentage": None,
+                "unprotected_percentage": None,
                 "normalized": False,
                 "normalized_cips_file": None,
                 "reason": None,
@@ -673,6 +714,8 @@ class FileIndex:
                 result["normalized_cips_file"] = os.path.basename(
                     cips.normalize_json_filepath
                 )
+                result["protected_percentage"] = cips.protected_percentage
+                result["unprotected_percentage"] = cips.unprotected_percentage
             return result
 
         rows = [row for _, row in self.df.iterrows() if pd.notna(row["CIPS"])]
@@ -692,6 +735,12 @@ class FileIndex:
                 ],
                 "cips_protection": [
                     result.get("cips_protection") for result in results
+                ],
+                "cips_protected_percentage": [
+                    result.get("protected_percentage") for result in results
+                ],
+                "cips_unprotected_percentage": [
+                    result.get("unprotected_percentage") for result in results
                 ],
             },
         )
@@ -724,31 +773,50 @@ class FileIndex:
         """Write the index as JSON records to ``<output_dir>/file_index.json``.
 
         Runs ``fix()`` first if needed, so empty ``Segment`` values are filled
-        from ``Sub Segment``. Only rows with both a ``normalized_cips_file``
-        and a ``normalized_pcm_file`` (``NORMALIZED_FILE_KEYS``) are written,
+        from ``Sub Segment``. Only rows with both a ``cips_normalized_file``
+        and a ``pcm_normalized_file`` (``NORMALIZED_FILE_KEYS``) are written,
         so run ``check_cips_file`` and ``check_pcm_file`` first. Every other
         row goes to ``<output_dir>/file_index_excluded.json`` instead, with
-        the same keys minus ``id``, plus ``cips_file`` / ``pcm_file`` (the
+        the same keys, plus ``cips_file`` / ``pcm_file`` (the
         source filenames from the index, ``null`` when the index has none)
         and ``missing`` (the ``NORMALIZED_FILE_KEYS`` that are ``null``). The
         reason a file was not normalized is in the ``check_*_file`` report.
 
         Keys of each written record:
 
-        - ``id`` (int): position among the written records, ``0..n-1``.
         - ``year`` (int), ``area`` (str).
         - ``area_code`` (str): slug of ``<area>-<year>``, e.g.
           ``"jakarta-2025"``.
-        - ``segment`` (str).
-        - ``pipe_diameter`` (int | float): ``Diameter``, as an int when whole.
-        - ``length`` (float).
-        - ``segment_code`` (str): slug of ``<segment>-<pipe_diameter>``, e.g.
+        - ``name`` (str): ``Segment``.
+        - ``code`` (str): slug of ``<name>-<diameter>``, e.g.
           ``"pipa-servis-indonesia-power-16"``.
-        - ``cips_protection`` (str | None) and ``normalized_cips_file``
-          (str | None): set by ``check_cips_file``; ``None`` until it ran,
-          and for rows without a usable CIPS file.
-        - ``normalized_pcm_file`` (str | None): set by ``check_pcm_file``;
-          ``None`` until it ran, and for rows without a usable PCM file.
+        - ``diameter`` (int | float): ``Diameter``, as an int when whole.
+        - ``pipe_length`` (float): ``Length``.
+        - ``cips_protection`` (str | None): ``"ICCP"`` / ``"SACP"``, set by
+          ``check_cips_file``.
+        - ``protected`` / ``unprotected`` (float | None): share of CIPS
+          readings that are ``PROTECTED`` or ``OVER PROTECTED`` /
+          ``UNPROTECTED``, in percent (they add up to 100); set by
+          ``check_cips_file`` (``df`` columns ``cips_protected_percentage`` /
+          ``cips_unprotected_percentage``), ``None`` without a normalized
+          CIPS.
+        - ``total_anomaly`` (int | None): number of ACVG/DCVG anomalies of
+          the segment (``AcvgDcvgFile.count``, ``TOTAL_ANOMALY_COLUMN``, set
+          by ``assign_acvg_dcvg``); ``None`` until it ran, and for segments
+          without ACVG/DCVG anomalies.
+        - ``medium_to_poor`` / ``medium_to_high`` (float | None): share of
+          PCM readings whose ``Condition`` is ``Medium to Poor`` / ``Medium
+          to High``, in percent (they add up to 100); set by
+          ``check_pcm_file`` (``df`` columns ``pcm_medium_to_poor`` /
+          ``pcm_medium_to_high``), ``None`` without a normalized PCM.
+        - ``acvg_dcvg_normalized_file`` (str | None): the normalized
+          ACVG/DCVG JSON of the segment (``ACVG_DCVG_COLUMN``, set by
+          ``assign_acvg_dcvg``); ``None`` until it ran, and for segments
+          without ACVG/DCVG anomalies. Not required to keep a row.
+        - ``cips_normalized_file`` / ``pcm_normalized_file`` (str | None):
+          set by ``check_cips_file`` / ``check_pcm_file`` (``df`` columns
+          ``normalized_cips_file`` / ``normalized_pcm_file``); ``None`` until
+          they ran, and for rows without a usable file.
 
         Empty values are written as ``null``. Both files are always written,
         possibly as ``[]``.
@@ -785,22 +853,7 @@ class FileIndex:
         records = []
         excluded = []
         for _, row in self.df.iterrows():
-            year = _json_value(row["Year"], whole_as_int=True)
-            area = _json_value(row["Area"])
-            segment = _json_value(row["Segment"])
-            diameter = _json_value(row["Diameter"], whole_as_int=True)
-            record = {
-                "year": year,
-                "area": area,
-                "area_code": slugify(f"{area}-{year}"),
-                "segment": segment,
-                "pipe_diameter": diameter,
-                "length": _json_value(row["Length"]),
-                "segment_code": (slugify(f"{segment}-{diameter}") if segment else None),
-                "cips_protection": _json_value(row.get("cips_protection")),
-                "normalized_cips_file": _json_value(row.get("normalized_cips_file")),
-                "normalized_pcm_file": _json_value(row.get("normalized_pcm_file")),
-            }
+            record = self._record(row)
 
             missing = [key for key in self.NORMALIZED_FILE_KEYS if record[key] is None]
             if missing:
@@ -813,7 +866,7 @@ class FileIndex:
                     }
                 )
             else:
-                records.append({"id": len(records), **record})
+                records.append(record)
 
         output_dir = resolve_output_dir(output_dir)
         filepath = os.path.join(output_dir, self.JSON_FILENAME)
@@ -836,6 +889,130 @@ class FileIndex:
 
         return filepath
 
+    def _record(self, row: pd.Series) -> dict:
+        """Return the ``to_json`` record of one ``df`` row."""
+        year = _json_value(row["Year"], whole_as_int=True)
+        area = _json_value(row["Area"])
+        segment = _json_value(row["Segment"])
+        diameter = _json_value(row["Diameter"], whole_as_int=True)
+        return {
+            "year": year,
+            "area": area,
+            "area_code": slugify(f"{area}-{year}"),
+            "name": segment,
+            "code": (slugify(f"{segment}-{diameter}") if segment else None),
+            "diameter": diameter,
+            "pipe_length": _json_value(row["Length"]),
+            "cips_protection": _json_value(row.get("cips_protection")),
+            "protected": _json_value(row.get("cips_protected_percentage")),
+            "unprotected": _json_value(row.get("cips_unprotected_percentage")),
+            self.TOTAL_ANOMALY_KEY: _json_value(
+                row.get(self.TOTAL_ANOMALY_COLUMN), whole_as_int=True
+            ),
+            "medium_to_poor": _json_value(row.get("pcm_medium_to_poor")),
+            "medium_to_high": _json_value(row.get("pcm_medium_to_high")),
+            self.ACVG_DCVG_FILE_KEY: _json_value(row.get(self.ACVG_DCVG_COLUMN)),
+            "cips_normalized_file": _json_value(row.get("normalized_cips_file")),
+            "pcm_normalized_file": _json_value(row.get("normalized_pcm_file")),
+        }
+
+    def assign_acvg_dcvg(
+        self,
+        files: dict[int, str],
+        output_dir: str | None = None,
+        counts: dict[int, int] | None = None,
+    ) -> Self:
+        """Add each row's ACVG/DCVG file and anomaly count, also to the JSON.
+
+        Sets the ``ACVG_DCVG_COLUMN`` and ``TOTAL_ANOMALY_COLUMN`` columns of
+        ``df``, so later ``to_json`` calls write ``acvg_dcvg_normalized_file``
+        and ``total_anomaly``. The ACVG/DCVG step runs after ``to_json`` (its
+        ``normalize`` needs the synced CIPS), so the ``JSON_FILENAME`` and
+        ``EXCLUDED_JSON_FILENAME`` already written in ``output_dir`` are
+        updated in place: every record, found by its ``year`` and ``code``,
+        gets both keys (``null`` when the row has no ACVG/DCVG file), in the
+        same key order as ``to_json`` records. Keys only the excluded file has
+        (``cips_file``, ``pcm_file``, ``missing``) stay last. A JSON file that
+        does not exist is skipped. The CIPS/PCM files are not synced again.
+
+        Args:
+            files (dict[int, str]): Row position in ``df`` (= row of the index
+                CSV ``AcvgDcvg.match`` read) -> normalized ACVG/DCVG JSON
+                filename, as returned by ``AcvgDcvg.normalized_files()``.
+            output_dir (str | None): Folder of the index JSON files. Defaults
+                to ``<cwd>/output``.
+            counts (dict[int, int] | None): Row position -> number of
+                anomalies, as returned by ``AcvgDcvg.anomaly_counts()``.
+                Defaults to none (``total_anomaly`` stays ``null``).
+
+        Returns:
+            Self: The same ``FileIndex`` instance, to allow chaining.
+
+        Example:
+            >>> acvg.load().match(csv).rebuild().clean().normalize()
+            >>> index.assign_acvg_dcvg(
+            ...     acvg.normalized_files(), counts=acvg.anomaly_counts()
+            ... )
+        """
+        if not self.fixed:
+            self.fix()
+
+        counts = counts or {}
+        df = self.df.copy()
+        for column, values in (
+            (self.ACVG_DCVG_COLUMN, files),
+            (self.TOTAL_ANOMALY_COLUMN, counts),
+        ):
+            df[column] = pd.Series(
+                [values.get(position) for position in range(len(df))],
+                index=df.index,
+                dtype=object,
+            )
+        self.df = df
+
+        acvg_keys = (self.ACVG_DCVG_FILE_KEY, self.TOTAL_ANOMALY_KEY)
+        by_segment: dict[tuple, dict] = {}
+        record_keys: list[str] = []
+        for _, row in self.df.iterrows():
+            record = self._record(row)
+            by_segment[(record["year"], record["code"])] = {
+                key: record[key] for key in acvg_keys
+            }
+            record_keys = list(record)
+
+        output_dir = resolve_output_dir(output_dir)
+        for name in (self.JSON_FILENAME, self.EXCLUDED_JSON_FILENAME):
+            path = os.path.join(output_dir, name)
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                records = json.load(f)
+            empty = dict.fromkeys(acvg_keys)
+            records = [
+                _ordered(
+                    {
+                        **record,
+                        **by_segment.get(
+                            (record.get("year"), record.get("code")), empty
+                        ),
+                    },
+                    record_keys,
+                )
+                for record in records
+            ]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(records, f, indent=4, ensure_ascii=False)
+
+        if self.verbose:
+            linked = sum(
+                v[self.ACVG_DCVG_FILE_KEY] is not None for v in by_segment.values()
+            )
+            logger.info(
+                f"Linked {linked} rows to a normalized ACVG/DCVG file in {output_dir}"
+            )
+
+        return self
+
     def save(self, output_dir: str | None = None) -> None:
         """Write ``df`` to ``<output_dir>/file_index_<slug>.csv``.
 
@@ -850,6 +1027,16 @@ class FileIndex:
         filepath = os.path.join(output_dir, filename)
 
         self.df.to_csv(filepath, index=False)
+
+
+def _ordered(record: dict, order: list[str]) -> dict:
+    """Return ``record`` with the ``order`` keys first, in that order.
+
+    Keys not in ``order`` (``cips_file``, ``pcm_file``, ``missing`` of the
+    excluded file, or keys of an older index) keep their order, after them.
+    """
+    first = {key: record[key] for key in order if key in record}
+    return {**first, **{k: v for k, v in record.items() if k not in first}}
 
 
 def _json_value(value, whole_as_int: bool = False):

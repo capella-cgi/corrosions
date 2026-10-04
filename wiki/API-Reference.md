@@ -14,6 +14,7 @@ their fully qualified paths shown in each section.
 - [`corrosions.utils.path_utils`](#corrosionsutilspath_utils) — path helpers
 - [`corrosions.utils.geo_utils`](#corrosionsutilsgeo_utils) — distance between coordinates
 - [`corrosions.sync`](#corrosionssync) — `SyncData`: same survey direction for CIPS and PCM
+- [`corrosions.data.acvg_dcvg`](#corrosionsdataacvg_dcvg) — `AcvgDcvg`: ACVG/DCVG anomalies per segment; `AcvgDcvgFile`: clean / normalize one segment file
 
 ---
 
@@ -165,7 +166,7 @@ Ensure every row has the values the index needs. Called by `__init__` after
   copies `Sub Segment` into an empty `Segment`. `Sub Segment` on its own may
   be empty.
 - The segment after that fill (`Segment`, else `Sub Segment`) together with
-  `Diameter` must be unique, so every row gets its own `segment_code` in
+  `Diameter` must be unique, so every row gets its own `code` in
   `to_json`. The same route with two diameters (e.g. `Unisma - Pd Ungu` at
   16 and 10 inch) is two pipes and allowed.
 - Text is compared with surrounding whitespace stripped; blank text (only
@@ -231,8 +232,10 @@ the report describes the cleaned data. Then [`normalize()`](#normalize---self-1)
 writes the normalized Excel/JSON under `<cwd>/output/normalize/pcm/`; a file
 that fails to normalize keeps its check columns.
 
-It also adds `normalized_pcm_file` to `df` (filename of the normalized JSON),
-used by [`to_json`](#to_jsonoutput_dir-str--none--none---str). It is empty for
+It also adds `normalized_pcm_file` to `df` (filename of the normalized JSON)
+and `pcm_medium_to_poor` / `pcm_medium_to_high`
+(`PCM.medium_to_poor_percentage` / `medium_to_high_percentage`), used by
+[`to_json`](#to_jsonoutput_dir-str--none--none---str). They are empty for
 rows without a PCM file, or whose file failed to load, clean or normalize.
 
 Returns a DataFrame with one row per index entry and columns:
@@ -248,6 +251,7 @@ Returns a DataFrame with one row per index entry and columns:
 | `duplicates` | Duplicate row records. |
 | `normalized` | `True` once `normalize()` wrote the Excel and JSON (`PCM.normalized`); `False` otherwise. |
 | `normalized_pcm_file` | Filename of the normalized JSON; empty unless `normalized`. |
+| `medium_to_poor_percentage` / `medium_to_high_percentage` | Share of readings whose `Condition` is `Medium to Poor` / `Medium to High`, in percent; empty unless `normalized`. |
 | `reason` | Populated when the row failed to load (missing file, exception, …) or to normalize (prefixed `normalize failed:`). |
 
 #### `check_cips_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
@@ -268,6 +272,9 @@ clean/normalize:
 - `normalized_cips_file`: filename of the normalized JSON
   (`CIPS.normalize_json_filepath`), e.g. `2025-cips-sacp-01-jkt-….json`.
 - `cips_protection`: `"ICCP"` or `"SACP"`.
+- `cips_protected_percentage` / `cips_unprotected_percentage`:
+  `CIPS.protected_percentage` / `unprotected_percentage` (set only when
+  normalized).
 
 The workers run in separate processes, so these values are returned with
 each result and merged into `df` by row afterwards.
@@ -284,6 +291,7 @@ each result and merged into `df` by row afterwards.
 | `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
 | `cleaned_path` | Path of the saved cleaned copy; empty when cleaning failed. |
 | `cips_protection` | `"ICCP"` / `"SACP"`; empty when cleaning failed. |
+| `protected_percentage` / `unprotected_percentage` | Share of readings that are `PROTECTED` or `OVER PROTECTED` / `UNPROTECTED`, in percent; empty unless normalized. |
 | `normalized` | `True` once `normalize()` wrote the Excel and JSON (`CIPS.normalized`); `False` otherwise. Only these rows get `normalized_cips_file` in `df`. |
 | `normalized_cips_file` | Filename of the normalized JSON; empty when cleaning or normalizing failed. |
 | `reason` | Populated when the file is missing, has no data sheet, or fails to load, or when cleaning or normalizing fails (prefixed `clean failed:` / `normalize failed:`). |
@@ -295,16 +303,16 @@ Write the index as JSON records to `<output_dir>/file_index.json`
 path. Runs `fix()` first if needed, so empty `Segment` values are filled from
 `Sub Segment`. Empty values are written as `null`.
 
-Only rows with **both** a `normalized_cips_file` and a `normalized_pcm_file`
+Only rows with **both** a `cips_normalized_file` and a `pcm_normalized_file`
 (`NORMALIZED_FILE_KEYS`) are written, so run `check_cips_file` and
 `check_pcm_file` first. Every other row goes to
 `<output_dir>/file_index_excluded.json` (`EXCLUDED_JSON_FILENAME`) with the
-same keys minus `id`, plus:
+same keys, plus:
 
 | Extra key | Content |
 | --- | --- |
 | `cips_file`, `pcm_file` | Source filenames from the index (`CIPS` / `PCM`); `null` when the index has none. |
-| `missing` | The `NORMALIZED_FILE_KEYS` that are `null`, e.g. `["normalized_pcm_file"]`. |
+| `missing` | The `NORMALIZED_FILE_KEYS` that are `null`, e.g. `["pcm_normalized_file"]`. |
 
 Why a file was not normalized is in the `check_cips_file` / `check_pcm_file`
 report (`reason`). Both files are always written, possibly as `[]`.
@@ -318,21 +326,47 @@ surveys start at the same end. The per-segment report is stored on
 
 | Key | Source |
 | --- | --- |
-| `id` | Position among the written records, `0..n-1`. |
 | `year`, `area` | `Year`, `Area`. |
 | `area_code` | Slug of `<area>-<year>`, e.g. `jakarta-2025`. |
-| `segment` | `Segment`. |
-| `pipe_diameter` | `Diameter`, as an int when whole (`16`, not `16.0`). |
-| `length` | `Length`, always a float (`2.0` stays `2.0`). |
-| `segment_code` | Slug of `<segment>-<pipe_diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
-| `cips_protection`, `normalized_cips_file` | Set by `check_cips_file`; `null` until it ran. |
-| `normalized_pcm_file` | Set by `check_pcm_file`; `null` until it ran. |
+| `name` | `Segment`. |
+| `code` | Slug of `<name>-<diameter>`, e.g. `pipa-servis-indonesia-power-16`. |
+| `diameter` | `Diameter`, as an int when whole (`16`, not `16.0`). |
+| `pipe_length` | `Length`, always a float (`2.0` stays `2.0`). |
+| `cips_protection` | `"ICCP"` / `"SACP"`, set by `check_cips_file`; `null` until it ran. |
+| `total_anomaly` | Number of ACVG/DCVG anomalies of the segment (`AcvgDcvgFile.count`), set by `assign_acvg_dcvg` (`df` column `acvg_dcvg_total_anomaly`); `null` until it ran and for segments without ACVG/DCVG anomalies. Written right after `unprotected`. |
+| `protected`, `unprotected` | Share of the CIPS readings that are `PROTECTED` or `OVER PROTECTED` / `UNPROTECTED`, in percent (they add up to 100). Set by `check_cips_file` (`df` columns `cips_protected_percentage` / `cips_unprotected_percentage`); `null` without a normalized CIPS. |
+| `medium_to_poor`, `medium_to_high` | Share of the PCM readings whose `Condition` is `Medium to Poor` / `Medium to High`, in percent (they add up to 100). Set by `check_pcm_file` (`df` columns `pcm_medium_to_poor` / `pcm_medium_to_high`); `null` without a normalized PCM. |
+| `acvg_dcvg_normalized_file` | Normalized ACVG/DCVG JSON of the segment, set by [`assign_acvg_dcvg`](#assign_acvg_dcvgfiles-output_dirnone---self) (`df` column `normalized_acvg_dcvg_file`); `null` until it ran and for segments without ACVG/DCVG anomalies. Not required to keep a row. |
+| `cips_normalized_file`, `pcm_normalized_file` | Set by `check_cips_file` / `check_pcm_file` (`df` columns `normalized_cips_file` / `normalized_pcm_file`); `null` until they ran. |
 
 ```python
 index.check_cips_file("output/raw_data", n_jobs=-1)
 index.check_pcm_file("output/raw_data", n_jobs=-1)
 index.to_json()   # "output/file_index.json" (+ "output/file_index_excluded.json")
 index.sync_report[index.sync_report["start_gap_m"] > 200]
+```
+
+#### `assign_acvg_dcvg(files, output_dir=None, counts=None) -> Self`
+
+Add the normalized ACVG/DCVG file and the anomaly count of each row. `files`
+maps a row position in `df` (the row of the index CSV that `AcvgDcvg.match`
+read) to the JSON filename, as returned by
+[`AcvgDcvg.normalized_files()`](#normalized_files---dictint-str); `counts`
+maps it to the number of anomalies, as returned by
+[`AcvgDcvg.anomaly_counts()`](#anomaly_counts---dictint-int). Sets the `df`
+columns `normalized_acvg_dcvg_file` (`ACVG_DCVG_COLUMN`) and
+`acvg_dcvg_total_anomaly` (`TOTAL_ANOMALY_COLUMN`), so later `to_json` calls
+write them. The ACVG/DCVG step runs after `to_json` (its `normalize` needs
+the synced CIPS), so `file_index.json` and `file_index_excluded.json` in
+`output_dir` are also updated in place: every record, found by `year` +
+`code`, gets `acvg_dcvg_normalized_file` and `total_anomaly` (`null` without
+a file), in the same key order as `to_json` records (the order comes from
+`_record`; the excluded file's `cips_file`, `pcm_file`, `missing` stay
+last). Missing JSON files are skipped; nothing is synced again.
+
+```python
+acvg.load().match(csv).rebuild().clean().normalize()
+index.assign_acvg_dcvg(acvg.normalized_files(), counts=acvg.anomaly_counts())
 ```
 
 #### `save(output_dir: str | None = None) -> None`
@@ -345,7 +379,7 @@ Write the current `df` to `<output_dir>/file_index_<filename_slug>.csv`.
 ```python
 from corrosions.data.file_index import FileIndex
 
-index = FileIndex("IDDA - File List.xlsx", verbose=True)
+index = FileIndex("IDDA - PCM CIPS File List.xlsx", verbose=True)
 index.rebuild(source_dir="//nas/surveys", destination_dir="data")
 report = index.check_pcm_file("output/data", n_jobs=-1)
 cips_report = index.check_cips_file("output/raw_data", n_jobs=-1)
@@ -373,7 +407,7 @@ before `clean()` to check the raw data and after to check the cleaned data.
 
 | Attribute | Type | Purpose |
 | --- | --- | --- |
-| `KIND` | `Literal["pcm", "cips"]` | Survey type; names the cleaned output sub-directory (upper-cased) and the normalize one (lower-cased). |
+| `KIND` | `Literal["pcm", "cips", "acvg_dcvg"]` | Survey type; names the cleaned output sub-directory (upper-cased) and the normalize one (lower-cased). |
 | `REQUIRED_COLUMNS` | `list[str]` | Columns expected in the source Excel, checked by `check()`. |
 | `NUMERIC_COLUMNS` | `list[str]` | Columns coerced with `pd.to_numeric(..., errors="coerce")` at load time. |
 | `CLEAN_REQUIRED_COLUMNS` | `list[str]` | Columns whose non-NaN value is required for a row to survive `clean()`. |
@@ -518,6 +552,11 @@ Requires a completed `clean()` (`RuntimeError` otherwise) and raises
 | `Current Loss Rate` | `abs(Δdbma / Δdistance) * 1000` between a reading and the previous one, rounded to 2 decimals; `0` for the first reading. Empty when either `dbma` is empty. |
 | `Condition` | `Medium to High` when `Current Loss Rate <= 50`, otherwise `Medium to Poor`, including when the rate is empty (no `dbma`). |
 
+It also sets `medium_to_high_percentage` (share of `Medium to High`
+readings, in percent, rounded to 2 decimals) and `medium_to_poor_percentage`
+(`100 -` that). Both are `0.0` before `normalize()`. Reversing the survey
+(`SyncData`) keeps the same reading pairs, so it does not change them.
+
 "Previous" means the row above: the index is not used, so the gaps `clean()`
 leaves in it are fine.
 
@@ -649,6 +688,11 @@ and JSON. Distances are computed with
 | `Real Distance` | Running total from the first reading, in meters. |
 | `Condition` | `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`) or `UNPROTECTED` (anything else, including an empty reading). `V` is `Off Voltage` for ICCP and `Voltage` for SACP, in volts. |
 
+It also sets `protected_percentage` (share of readings that are `PROTECTED`
+or `OVER PROTECTED`, in percent, rounded to 2 decimals) and
+`unprotected_percentage` (`100 - protected_percentage`, the `UNPROTECTED`
+share). Both are `0.0` before `normalize()`.
+
 | File | Content |
 | --- | --- |
 | `normalize_excel_filepath` = `<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
@@ -670,6 +714,212 @@ cips = CIPS("segment.xlsx", year=2024).clean().normalize()
 cips.df["Real Distance"].iloc[-1]   # survey length in meters
 cips.normalize_json_filepath        # "output/normalize/cips/json/2024-segment.json"
 ```
+
+---
+
+## `corrosions.data.acvg_dcvg`
+
+### `class AcvgDcvg`
+
+ACVG/DCVG anomaly reader. Anomalies (points) are saved as one workbook per
+year in `DEFAULT_DATA_DIR` (`D:\Data\ACVG DCVG 2021-2025`), listed in an
+index workbook (`IDDA - ACVG FIle List.xlsx`: `Year`, `Filename`). Each
+workbook has one sheet per area (`SHEET_NAMES`: Bekasi, Bogor, Cilegon,
+Cirebon, Jakarta, Karawang, Tangerang); other sheets (e.g. `Contoh format
+Gabungan`) are skipped.
+
+Fluent pipeline:
+
+```python
+from corrosions.data.acvg_dcvg import AcvgDcvg
+
+csv = "output/file_index_idda-pcm-cips-file-list.csv"   # FileIndex.save()
+acvg = AcvgDcvg("IDDA - ACVG FIle List.xlsx", skip_years=[2021], verbose=True)
+acvg.load().match(csv).rebuild()   # output/raw_data/<year>/ACVG_DCVG/*.xlsx
+acvg.clean().normalize()           # output/cleaned/<year>/ACVG_DCVG, output/normalize/acvg_dcvg
+report = acvg.assign_index()       # adds ACVG_DCVG to the CSV; per-group report
+acvg.file_report                   # per-file clean/normalize report
+```
+
+| Attribute | Description |
+| --- | --- |
+| `SHEET_NAMES` | Area sheets that hold anomalies. |
+| `REQUIRED_COLUMNS` | `Segmen`, `Lokasi Anomali`, `Kondisi Permukaan`, `Dia (inch)`, `Latitude`, `Longitude`, `On Potential (volt)`, `Off Potential (volt)`, `IR Drop (%)`, `Hasil ACVG (dB)`, `Kedalaman Pipa (m)`, `%drop PCM`, `Tgl DCVG`, `Tgl ACVG` (after stripping header spaces). |
+| `NUMERIC_COLUMNS` | Coerced to numbers: `"61.80%"` -> `61.8`; `N/A`, `-`, `not detected` -> empty. |
+| `DATE_COLUMNS` | `Tgl DCVG`, `Tgl ACVG`; a row with a real date in another year than its workbook is dropped. |
+| `MAX_DISTANCE_M` | `500`: largest distance between an anomaly and the CIPS track it is linked to. |
+| `DESTINATION_SUBDIR` / `INDEX_COLUMN` | `ACVG_DCVG`. |
+| `FILE_REPORT_COLUMNS` | Columns of `file_report`. |
+| `anomalies`, `load_report`, `groups`, `output_files`, `file_report` | Results of `load`, `match`, `rebuild` and `clean` / `normalize`. |
+
+#### `__init__(filepath, data_dir=DEFAULT_DATA_DIR, skip_years=None, verbose=False)`
+
+Load the ACVG/DCVG index, drop `skip_years`, and check every listed workbook
+exists (`FileNotFoundError` naming the missing ones; `KeyError` without `Year`
+/ `Filename`).
+
+#### `load() -> Self`
+
+Read every area sheet: strip header names, skip sheets missing a required
+column, drop rows without `Segmen` (notes such as `Tim Aldi 4`), parse
+`Latitude` / `Longitude` with [`parse_coordinate`](#parse_coordinatevalue---float--none)
+(numbers and degrees-minutes-seconds), coerce `NUMERIC_COLUMNS`, and drop rows
+dated in another year. `Year` and `Area` (the sheet) are added in front. Every
+skipped sheet and dropped row is listed in `load_report` (`year`, `sheet`,
+`issue`, `rows`).
+
+#### `match(index_csv, normalize_dir=None, max_distance_m=None) -> Self`
+
+Link every anomaly to a row of the file-index CSV:
+
+1. **name** (per group): a group is the anomalies sharing `Year`, `Area`,
+   `Segmen` and `Dia (inch)`. When the slug of `Segmen` equals the slug of a
+   same-year index `Segment` or `Sub Segment` (the same `Diameter` wins a
+   tie), the whole group goes to that row.
+2. **cips** (per anomaly): every other anomaly goes to the same-year index row
+   whose normalized CIPS track
+   (`<normalize_dir>/cips/json/<year>-<slug of CIPS>.json`) passes closest to
+   it, if within `max_distance_m`. A group can be split: anomalies named after
+   a parent pipeline (2023: `Batuceper - Pondok Ungu`) go to the index section
+   they lie on (`PU - Batu Ceper: Dok Kodja - BP AKR Sunter`, …), numbered
+   names (2022: `Eks Sumber Bata 0`, `… 1`) go to their track, and anomalies at
+   a segment border go to the segment they lie on.
+3. **none**: the rest stay unmatched, grouped by name.
+
+Linked anomalies take the file name of their index row,
+`acvg-dcvg-<segment>-<diameter>-<area>.xlsx` (slugified), so every linked row
+has exactly one file. Unmatched groups use their own name. `anomalies` gets
+`_row`, `_method` and `_distance`; `groups` (the report) holds one row per
+(index row, method) and per unmatched name group: `year`, `area`, `segment`
+(the ACVG/DCVG names, joined), `diameter`, `n_anomalies`, `method`,
+`index_row`, `index_segment`, `cips_file`, `distance_m` (median over its
+anomalies), `filename`.
+
+#### `unlinked_segments() -> pd.DataFrame`
+
+List every index row that `match` linked to no group, with the reason, so an
+empty `ACVG_DCVG` cell can be explained. Columns: `year`, `area`, `segment`,
+`diameter`, `cips`, `reason`, `nearest_anomaly_m` (meters from the row's CIPS
+track to the nearest same-year anomaly), `nearest_anomaly_segmen` and
+`nearest_linked_to` (the index segment that anomaly went to).
+
+| `reason` | Meaning |
+| --- | --- |
+| `no anomaly within <limit> m` | the nearest anomaly is further than the limit: usually no ACVG/DCVG survey on that segment that year |
+| `anomalies nearby, linked to another row` | an anomaly lies on the track but went to another row: by its name, or because another row's track passes even closer (e.g. two index rows on the same pipe) |
+| `anomalies nearby, not linked` | safety net; does not occur with per-anomaly matching |
+| `no CIPS file in the index` / `CIPS not normalized` | no track to compare with; only a name match was possible |
+| `no ACVG/DCVG anomaly in <year>` | that year has no anomalies with coordinates |
+
+Raises `RuntimeError` before `match`. On the 2022-2025 data: 93 unlinked rows
+(77 no anomaly within 500 m, 10 linked to another row, 5 without a CIPS file,
+1 not normalized).
+
+#### `rebuild(output_dir=None, destination_dir="raw_data") -> Self`
+
+Write one Excel per file name to
+`<output_dir>/<destination_dir>/<year>/ACVG_DCVG/<filename>`, with `Year`,
+`Area` and the sheet's columns (parsed values). `REQUIRED_COLUMNS` are always
+kept; other all-empty columns (extra columns of another workbook) and the
+internal `_` match columns are left out. Raises `RuntimeError` before
+`match`.
+
+#### `clean() -> Self`
+
+Run [`AcvgDcvgFile`](#class-acvgdcvgfilebasedata)`(path, year).check().clean().save()`
+on every file `rebuild` wrote; the cleaned copy goes to
+`<output_dir>/cleaned/<year>/ACVG_DCVG/<filename>` (`output_dir` as given to
+`rebuild`), next to the cleaned CIPS and PCM. A failing file gets a `reason`
+(`clean failed: …`) and the others go on. Sets `file_report`: `year`,
+`filename`, `n_anomalies`, `n_duplicates`, `n_cleaned`, `cleaned_path`,
+`cips_file`, `normalized_file`, `count`, `n_on_cips`, `reason`. Raises `RuntimeError`
+before `rebuild`.
+
+#### `normalize() -> Self`
+
+Run `AcvgDcvgFile.normalize` on every cleaned file, with the normalized CIPS
+JSON of the index row it belongs to (`<normalize_dir>/cips/json/<cips_file>`,
+`normalize_dir` as given to `match`). Files without a CIPS line (unmatched
+groups, rows without a normalized CIPS) are normalized with an empty
+`real_distance` / `condition`. Fills `normalized_file`, `count` and `n_on_cips` in
+`file_report` (`reason` = `normalize failed: …` on error). Run it after the
+CIPS/PCM sync, as `main.py` does, so distances follow the synced direction.
+Raises `RuntimeError` before `clean`.
+
+#### `normalized_files() -> dict[int, str]`
+
+Row position in the index CSV given to `match` -> normalized JSON filename
+(`<year>-<slug>.json`) of every linked row, for
+[`FileIndex.assign_acvg_dcvg`](#assign_acvg_dcvgfiles-output_dirnone---self).
+Unmatched groups and files that failed to clean or normalize are left out.
+Raises `RuntimeError` before `normalize`.
+
+#### `anomaly_counts() -> dict[int, int]`
+
+Row position in the index CSV given to `match` -> number of anomalies in its
+normalized file (`AcvgDcvgFile.count`), for the same rows as
+`normalized_files()`; `total_anomaly` in `file_index.json`. Raises
+`RuntimeError` before `normalize`.
+
+#### `assign_index(index_csv=None) -> pd.DataFrame`
+
+Add the `ACVG_DCVG` column (the file name of each matched index row, empty
+otherwise) to the CSV given to `match` and write it back. Returns `groups`.
+
+On the 2022-2025 data: 607 anomalies (339 linked by name, 251 by CIPS with a
+median distance of 3.3 m, 17 unmatched), 98 of 191 index rows linked. The 2023 workbook holds 34 rows dated 2025 (33 also in the 2025
+workbook), which are dropped from 2023. `clean` / `normalize`: 109 files, 606
+anomalies after cleaning, 589 placed on a CIPS line (the 17 unmatched have
+none), in about 20 s.
+
+### `class AcvgDcvgFile(BaseData)`
+
+One extracted segment file (`AcvgDcvg.rebuild` output). Inherits
+`check` / `clean` / `save` from [`BaseData`](#corrosionsdatabase_data), so it
+writes to the same layout as `CIPS` and `PCM`.
+
+```python
+from corrosions.data.acvg_dcvg import AcvgDcvgFile
+
+data = AcvgDcvgFile("output/raw_data/2024/ACVG_DCVG/<file>.xlsx", year=2024)
+data.check().clean().save()      # output/cleaned/2024/ACVG_DCVG/<file>.xlsx
+data.normalize("output/normalize/cips/json/2024-<cips slug>.json")
+```
+
+| Attribute | Value |
+| --- | --- |
+| `KIND` | `"acvg_dcvg"` (cleaned: `ACVG_DCVG`, normalize: `acvg_dcvg`) |
+| `REQUIRED_COLUMNS` | `AcvgDcvg.REQUIRED_COLUMNS` |
+| `NUMERIC_COLUMNS` | `Latitude`, `Longitude` + `AcvgDcvg.NUMERIC_COLUMNS` |
+| `CLEAN_REQUIRED_COLUMNS` / `UNIQUE_COLUMNS` | `Latitude`, `Longitude` |
+| `JSON_COLUMNS` | `latitude`, `longitude`, `real_distance`, `anomaly_location` (`Lokasi Anomali`), `kondisi_permukaan`, `diameter` (`Dia (inch)`), `on_potential`, `off_potential`, `ir_drop`, `result_acvg` (`Hasil ACVG (dB)`), `pipe_depth` (`Kedalaman Pipa (m)`), `drop_pcm`, `survey_dcvg` / `survey_acvg` (`Tgl DCVG` / `Tgl ACVG`), `closest_cips_condition` (`Condition`). `Segmen` is in the Excel only. |
+| `cips_json` | CIPS JSON used by the last `normalize`, or `None` |
+| `count` | Number of anomalies (rows of `df`) after `normalize`; `0` before. |
+
+`clean()` (from `BaseData`) drops all-empty rows, rows with an empty or `0`
+coordinate, and duplicate points (first kept).
+
+#### `normalize(cips_json=None, max_distance_m=AcvgDcvg.MAX_DISTANCE_M) -> Self`
+
+Place every anomaly on its segment's CIPS line. Each anomaly takes the nearest
+reading of `cips_json` (the normalized CIPS JSON) and gets:
+
+- `Real Distance`: that reading's `real_distance`, i.e. its position along the
+  CIPS line (meters), so anomalies line up with the CIPS/PCM charts;
+- `Condition`: that reading's `condition` (`PROTECTED` / `OVER PROTECTED` /
+  `UNPROTECTED`);
+- `CIPS Offset (m)`: distance to that reading (Excel only).
+
+`Real Distance` and `Condition` stay empty without `cips_json` or when the
+nearest reading is further than `max_distance_m`. Rows are sorted by
+`Real Distance` (empty last); missing `REQUIRED_COLUMNS` are added empty.
+Writes `normalize_excel_filepath`
+(`<output_dir>/normalize/acvg_dcvg/excel/<year>-<slug>.xlsx`, original column
+names) and `normalize_json_filepath`
+(`<output_dir>/normalize/acvg_dcvg/json/<year>-<slug>.json`, `JSON_COLUMNS`
+keys; dates as `YYYY-MM-DD`, date text such as `20-May` kept; empty cells
+`null`). Raises `RuntimeError` before `clean`, `FileNotFoundError` for a
+missing `cips_json`.
 
 ---
 
@@ -720,7 +970,7 @@ same order every time, so running `sync()` again changes nothing.
 
 | Attribute | Description |
 | --- | --- |
-| `REQUIRED_KEYS` | Keys every index record must have: `year`, `area`, `area_code`, `segment`, `segment_code`, `pipe_diameter`, `length`, `cips_protection`, `normalized_cips_file`, `normalized_pcm_file`. |
+| `REQUIRED_KEYS` | Keys every index record must have: `year`, `area`, `area_code`, `name`, `code`, `diameter`, `pipe_length`, `cips_protection`, `cips_normalized_file`, `pcm_normalized_file`. |
 | `COORDINATES` | JSON latitude/longitude keys per kind: `latitude` / `longitude` for both CIPS and PCM. |
 | `EXCEL_COORDINATES` | Excel latitude/longitude columns: CIPS `Latitude` / `Longitude`, PCM `PCM.UNIQUE_COLUMNS` (`Int GPS Latitude` / `Longitude`). |
 | `SURVEYS` | Survey class per kind (`CIPS`, `PCM`); its `json_frame` rebuilds the JSON. |
@@ -760,12 +1010,12 @@ Sync every segment and return one report row per index record
 
 | Column | Description |
 | --- | --- |
-| `year`, `area`, `segment_code` | From the index record. |
+| `year`, `area`, `segment_code` | From the index record (`segment_code` is its `code`). |
 | `start_gap_m` | Meters between the CIPS and PCM start ends after syncing. A large gap means the two files do not cover the same stretch, or one of them belongs to another segment. |
 | `cips_axis` | `west-east` or `north-south`, the main direction of the CIPS line (and the direction it is walked after syncing). |
 | `cips_reversed`, `pcm_reversed` | Whether that survey was reversed and rewritten (JSON and Excel). |
 | `reason` | Why a segment was skipped (missing, unreadable or empty file, missing keys/columns, missing Excel, `write failed: ...`); empty when synced. Other segments still run. |
-| `normalized_cips_file`, `normalized_pcm_file` | From the index record. |
+| `normalized_cips_file`, `normalized_pcm_file` | From the index record (`cips_normalized_file` / `pcm_normalized_file`). |
 | `cips_json_path`, `pcm_json_path`, `cips_excel_path`, `pcm_excel_path` | Full paths of the four files, also for skipped segments. |
 
 On the 2022-2025 data (182 segments, `n_jobs=-1`): the sync took 14 s,
@@ -832,6 +1082,14 @@ Also importable from `corrosions.utils`.
 ### `EARTH_RADIUS_M: float`
 
 Mean Earth radius, `6_371_000.0` meters.
+
+### `parse_coordinate(value) -> float | None`
+
+Return a latitude/longitude as decimal degrees: numbers, numeric strings
+(`"-6.587569"`) and degrees-minutes-seconds with a hemisphere letter
+(`6°15'16.8"S`, `106°59'58.7"E`; any separator, so a mangled degree sign
+still works). `S` / `W` give negative values; anything else (`None`, `NaN`,
+`""`, `"N/A"`, `"-"`) gives `None`. Also importable from `corrosions.utils`.
 
 ### `calculate_distance(lat1, lon1, lat2, lon2) -> float | np.ndarray | pd.Series`
 

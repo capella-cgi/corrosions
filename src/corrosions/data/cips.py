@@ -132,6 +132,12 @@ class CIPS(BaseData):
         """
         super().__init__(filepath, year, output_dir, verbose)
         self.protection: Literal["ICCP", "SACP"] = "ICCP"
+
+        # Share of readings (0-100) per Condition, set by normalize():
+        # PROTECTED + OVER PROTECTED, and UNPROTECTED.
+        self.protected_percentage: float = 0.0
+        self.unprotected_percentage: float = 0.0
+
         self.fixed: bool = False
 
     @classmethod
@@ -316,6 +322,11 @@ class CIPS(BaseData):
           - ``OVER PROTECTED``: ``V <= -1.2``
           - ``UNPROTECTED``: anything else, including an empty reading.
 
+        Sets ``self.protected_percentage`` (share of readings that are
+        ``PROTECTED`` or ``OVER PROTECTED``) and ``self.unprotected_percentage``
+        (share that is ``UNPROTECTED``), in percent of all readings, rounded to
+        2 decimals; together they make 100.
+
         Then writes two files and sets ``self.normalized``:
 
         - ``normalize_excel_filepath``
@@ -370,6 +381,13 @@ class CIPS(BaseData):
 
         voltage_column = "Voltage" if self.protection == "SACP" else "Off Voltage"
         df["Condition"] = df[voltage_column].apply(lambda x: _condition(x))
+
+        # clean() leaves at least one row, so len(df) > 0
+        counts = df["Condition"].value_counts()
+        protected = counts.get("PROTECTED", 0) + counts.get("OVER PROTECTED", 0)
+        self.protected_percentage = round(100 * float(protected) / len(df), 2)
+        # every reading has one of the three conditions
+        self.unprotected_percentage = round(100 - self.protected_percentage, 2)
 
         # Save to excel with original column name
         os.makedirs(self.normalize_excel_dir, exist_ok=True)

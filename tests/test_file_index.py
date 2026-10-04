@@ -154,6 +154,11 @@ def test_check_cips_file(tmp_path, monkeypatch):
         None,  # unknown.xlsx: clean failed
     ]
     assert index.df["cips_protection"].tolist()[:3] == ["ICCP", "ICCP", None]
+    # set only for normalized files; the two shares add up to 100
+    good = index.df.loc[0, ["cips_protected_percentage", "cips_unprotected_percentage"]]
+    assert good.sum() == 100.0
+    assert report.loc["good.xlsx", "protected_percentage"] == good.iloc[0]
+    assert pd.isna(index.df.loc[2, "cips_protected_percentage"])  # clean failed
     assert pd.isna(index.df.loc[6, "normalized_cips_file"])  # missing.xlsx
     assert pd.isna(index.df.loc[7, "cips_protection"])  # no CIPS filename
 
@@ -161,10 +166,10 @@ def test_check_cips_file(tmp_path, monkeypatch):
     records, excluded = _read_index_json(index.to_json(str(tmp_path / "out")))
     assert records == []
     assert excluded[0]["cips_protection"] == "ICCP"
-    assert excluded[0]["normalized_cips_file"] == "2024-good.json"
-    assert excluded[0]["missing"] == ["normalized_pcm_file"]
+    assert excluded[0]["cips_normalized_file"] == "2024-good.json"
+    assert excluded[0]["missing"] == ["pcm_normalized_file"]
     assert excluded[2]["cips_file"] == "unknown.xlsx"
-    assert excluded[2]["missing"] == ["normalized_cips_file", "normalized_pcm_file"]
+    assert excluded[2]["missing"] == ["cips_normalized_file", "pcm_normalized_file"]
 
     # skip_years leaves those years out of the report entirely
     skipped = FileIndex(str(index_path), skip_years=[2021, 2022]).check_cips_file(
@@ -297,42 +302,56 @@ def test_to_json(tmp_path):
 
     # what the two checks would merge into df
     index.df["cips_protection"] = ["SACP", "ICCP", "ICCP", None]
+    index.df["cips_protected_percentage"] = [80.0, 66.67, 100.0, None]
+    index.df["cips_unprotected_percentage"] = [20.0, 33.33, 0.0, None]
     index.df["normalized_cips_file"] = ["c1.json", "c2.json", "c3.json", None]
     index.df["normalized_pcm_file"] = ["p1.json", "p2.json", None, None]
+    index.df["pcm_medium_to_poor"] = [10.0, 25.5, None, None]
+    index.df["pcm_medium_to_high"] = [90.0, 74.5, None, None]
 
     records, excluded = _read_index_json(index.to_json(str(out), sync=False))
     assert records == [
         {
-            "id": 0,
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
-            "segment": "Pipa Servis Indonesia Power",  # filled from Sub Segment
-            "pipe_diameter": 16,
-            "length": 1.75,
-            "segment_code": "pipa-servis-indonesia-power-16",
+            "name": "Pipa Servis Indonesia Power",  # filled from Sub Segment
+            "code": "pipa-servis-indonesia-power-16",
+            "diameter": 16,
+            "pipe_length": 1.75,
             "cips_protection": "SACP",
-            "normalized_cips_file": "c1.json",
-            "normalized_pcm_file": "p1.json",
+            "protected": 80.0,
+            "unprotected": 20.0,
+            "total_anomaly": None,
+            "cips_normalized_file": "c1.json",
+            "medium_to_poor": 10.0,
+            "medium_to_high": 90.0,
+            "pcm_normalized_file": "p1.json",
+            "acvg_dcvg_normalized_file": None,
         },
         {
-            "id": 1,
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
-            "segment": "RE Martadinata",
-            "pipe_diameter": 10.5,
-            "length": 2.0,  # length stays a float even when whole
-            "segment_code": "re-martadinata-10-5",
+            "name": "RE Martadinata",
+            "code": "re-martadinata-10-5",
+            "diameter": 10.5,
+            "pipe_length": 2.0,  # pipe_length stays a float
             "cips_protection": "ICCP",
-            "normalized_cips_file": "c2.json",
-            "normalized_pcm_file": "p2.json",
+            "protected": 66.67,
+            "unprotected": 33.33,
+            "total_anomaly": None,
+            "cips_normalized_file": "c2.json",
+            "medium_to_poor": 25.5,
+            "medium_to_high": 74.5,
+            "pcm_normalized_file": "p2.json",
+            "acvg_dcvg_normalized_file": None,
         },
     ]
     # == cannot tell 16 from 16.0, so check the JSON types explicitly
-    assert type(records[0]["pipe_diameter"]) is int
+    assert type(records[0]["diameter"]) is int
     assert type(records[0]["year"]) is int
-    assert type(records[1]["length"]) is float
+    assert type(records[1]["pipe_length"]) is float
 
     # rows without both normalized files, no id, plus source files + missing
     assert excluded == [
@@ -340,31 +359,43 @@ def test_to_json(tmp_path):
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
-            "segment": "Third",
-            "pipe_diameter": 8,
-            "length": 1.0,
-            "segment_code": "third-8",
+            "name": "Third",
+            "code": "third-8",
+            "diameter": 8,
+            "pipe_length": 1.0,
             "cips_protection": "ICCP",
-            "normalized_cips_file": "c3.json",
-            "normalized_pcm_file": None,
+            "protected": 100.0,
+            "unprotected": 0.0,
+            "total_anomaly": None,
+            "cips_normalized_file": "c3.json",
+            "medium_to_poor": None,
+            "medium_to_high": None,
+            "pcm_normalized_file": None,
+            "acvg_dcvg_normalized_file": None,
             "cips_file": "CIPS 03.xlsx",
             "pcm_file": None,
-            "missing": ["normalized_pcm_file"],
+            "missing": ["pcm_normalized_file"],
         },
         {
             "year": 2025,
             "area": "Jakarta",
             "area_code": "jakarta-2025",
-            "segment": "Fourth",
-            "pipe_diameter": 8,
-            "length": 1.0,
-            "segment_code": "fourth-8",
+            "name": "Fourth",
+            "code": "fourth-8",
+            "diameter": 8,
+            "pipe_length": 1.0,
             "cips_protection": None,
-            "normalized_cips_file": None,
-            "normalized_pcm_file": None,
+            "protected": None,
+            "unprotected": None,
+            "total_anomaly": None,
+            "cips_normalized_file": None,
+            "medium_to_poor": None,
+            "medium_to_high": None,
+            "pcm_normalized_file": None,
+            "acvg_dcvg_normalized_file": None,
             "cips_file": None,
             "pcm_file": None,
-            "missing": ["normalized_cips_file", "normalized_pcm_file"],
+            "missing": ["cips_normalized_file", "pcm_normalized_file"],
         },
     ]
 
@@ -533,6 +564,11 @@ def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
 
     assert index.df["normalized_pcm_file"].tolist()[0] == "2025-pcm-01-good.json"
     assert index.df["normalized_pcm_file"].isna().tolist()[1:] == [True, True, True]
+    # set only for the normalized file; the two shares add up to 100
+    good = index.df.loc[0, ["pcm_medium_to_poor", "pcm_medium_to_high"]]
+    assert good.sum() == 100.0
+    assert report.loc["PCM 01 good.xlsx", "medium_to_high_percentage"] == good.iloc[1]
+    assert index.df["pcm_medium_to_high"].isna().tolist()[1:] == [True, True, True]
 
     records = json.loads(
         open(index.to_json(str(tmp_path / "out")), encoding="utf-8").read()
@@ -540,8 +576,8 @@ def test_check_pcm_file_normalizes_and_merges(tmp_path, monkeypatch):
     assert records == []  # no CIPS files in this index
     with open(tmp_path / "out" / "file_index_excluded.json", encoding="utf-8") as f:
         excluded = json.load(f)
-    assert excluded[0]["normalized_pcm_file"] == "2025-pcm-01-good.json"
-    assert excluded[0]["missing"] == ["normalized_cips_file"]
+    assert excluded[0]["pcm_normalized_file"] == "2025-pcm-01-good.json"
+    assert excluded[0]["missing"] == ["cips_normalized_file"]
     assert excluded[3]["pcm_file"] is None
 
 
@@ -589,3 +625,45 @@ def test_to_json_syncs_the_normalized_files(tmp_path, monkeypatch):
         assert json.load(f)[0]["longitude"] == 106.1  # now starts at the west end
     excel = pd.read_excel(pcm.normalize_excel_filepath)
     assert excel["Int GPS Longitude"].iloc[0] == 106.1
+    # reversing keeps the same reading pairs: the condition shares are unchanged
+    high = 100 * (excel["Condition"] == "Medium to High").mean()
+    assert round(high, 2) == pcm.medium_to_high_percentage
+
+
+def test_assign_acvg_dcvg_updates_the_written_json(tmp_path):
+    path = tmp_path / "index.xlsx"
+    _write_value_index(
+        path, [{"Segment": "One"}, {"Segment": "Two"}, {"Segment": "Three"}]
+    )
+    index = FileIndex(str(path))
+    index.df["normalized_cips_file"] = ["c1.json", "c2.json", None]
+    index.df["normalized_pcm_file"] = ["p1.json", "p2.json", None]
+    out = tmp_path / "out"
+    records, excluded = _read_index_json(index.to_json(str(out), sync=False))
+    assert [r["acvg_dcvg_normalized_file"] for r in records] == [None, None]
+
+    # written before the ACVG/DCVG step: updated in place, by segment
+    index.assign_acvg_dcvg(
+        {1: "2024-acvg-two.json", 2: "2024-acvg-three.json"},
+        str(out),
+        counts={1: 4, 2: 7},
+    )
+
+    records, excluded = _read_index_json(str(out / FileIndex.JSON_FILENAME))
+    assert [r["acvg_dcvg_normalized_file"] for r in records] == [
+        None,
+        "2024-acvg-two.json",
+    ]
+    assert [r["total_anomaly"] for r in records] == [None, 4]
+    # same key order as the records to_json writes
+    assert list(records[0]) == list(index._record(index.df.iloc[0]))
+    assert excluded[0]["acvg_dcvg_normalized_file"] == "2024-acvg-three.json"
+    assert excluded[0]["total_anomaly"] == 7
+    # the excluded file's own keys stay last
+    assert list(excluded[0])[-3:] == ["cips_file", "pcm_file", "missing"]
+    # not a required key: the excluded row still misses only CIPS/PCM
+    assert excluded[0]["missing"] == ["cips_normalized_file", "pcm_normalized_file"]
+
+    # later to_json calls write it from df, the same way
+    rewritten, _ = _read_index_json(index.to_json(str(out), sync=False))
+    assert rewritten == records

@@ -15,8 +15,9 @@ class BaseData:
     fluent pipeline: ``Subclass(...).check().clean().save()``.
 
     Attributes:
-        KIND (Literal["pcm", "cips"]): Survey type; names the cleaned output
-            sub-directory (upper-cased) and the normalize one (lower-cased).
+        KIND (Literal["pcm", "cips", "acvg_dcvg"]): Survey type; names the
+            cleaned output sub-directory (upper-cased) and the normalize one
+            (lower-cased).
         REQUIRED_COLUMNS (list[str]): Columns expected in the source Excel.
         NUMERIC_COLUMNS (list[str]): Columns coerced to numeric via
             ``pd.to_numeric(..., errors="coerce")`` at load time.
@@ -51,7 +52,7 @@ class BaseData:
         verbose (bool): If True, methods may emit progress messages.
     """
 
-    KIND: Literal["pcm", "cips"]
+    KIND: Literal["pcm", "cips", "acvg_dcvg"]
     REQUIRED_COLUMNS: list[str]
     NUMERIC_COLUMNS: list[str]
     CLEAN_REQUIRED_COLUMNS: list[str]

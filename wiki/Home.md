@@ -46,7 +46,8 @@ src/corrosions/
 │   ├── file_index.py   # FileIndex: Excel index of CIPS/PCM files
 │   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline
 │   ├── pcm.py          # PCM(BaseData): single PCM survey file
-│   └── cips.py         # CIPS(BaseData): single CIPS survey file
+│   ├── cips.py         # CIPS(BaseData): single CIPS survey file
+│   └── acvg_dcvg.py    # AcvgDcvg: anomalies per segment; AcvgDcvgFile(BaseData): clean/normalize
 └── utils/
     ├── dataframe_utils.py  # get_sheets / get_sheet_columns helpers
     ├── geo_utils.py    # calculate_distance (haversine, Series-aware)

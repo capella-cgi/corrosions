@@ -12,10 +12,10 @@ INDEX_RECORD = {
     "year": 2025,
     "area": "Jakarta",
     "area_code": "jakarta-2025",
-    "segment": "Seg A",
-    "segment_code": "seg-a-16",
-    "pipe_diameter": 16,
-    "length": 1.0,
+    "name": "Seg A",
+    "code": "seg-a-16",
+    "diameter": 16,
+    "pipe_length": 1.0,
     "cips_protection": "ICCP",
 }
 
@@ -56,10 +56,9 @@ def _normalize(cls, data: dict, path, output_dir) -> str:
 
 def _write_index(path, cips_file: str, pcm_file: str) -> str:
     record = {
-        "id": 0,
         **INDEX_RECORD,
-        "normalized_cips_file": cips_file,
-        "normalized_pcm_file": pcm_file,
+        "cips_normalized_file": cips_file,
+        "pcm_normalized_file": pcm_file,
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump([record], f)
@@ -338,10 +337,10 @@ def test_missing_file_is_reported_and_others_still_run(tmp_path):
     with open(tmp_path / "file_index.json", "w", encoding="utf-8") as f:
         json.dump(
             [
-                {**INDEX_RECORD, "normalized_cips_file": "c.json",
-                 "normalized_pcm_file": "missing.json"},
-                {**INDEX_RECORD, "segment_code": "empty",
-                 "normalized_cips_file": "c.json", "normalized_pcm_file": "e.json"},
+                {**INDEX_RECORD, "cips_normalized_file": "c.json",
+                 "pcm_normalized_file": "missing.json"},
+                {**INDEX_RECORD, "code": "empty",
+                 "cips_normalized_file": "c.json", "pcm_normalized_file": "e.json"},
             ],
             f,
         )
@@ -362,10 +361,10 @@ def test_missing_index_file_raises(tmp_path):
 
 
 def test_missing_required_key_raises(tmp_path):
-    record = {**INDEX_RECORD, "normalized_cips_file": "c.json"}  # no PCM key
+    record = {**INDEX_RECORD, "cips_normalized_file": "c.json"}  # no PCM key
     with open(tmp_path / "file_index.json", "w", encoding="utf-8") as f:
         json.dump([record], f)
-    with pytest.raises(KeyError, match="normalized_pcm_file"):
+    with pytest.raises(KeyError, match="pcm_normalized_file"):
         SyncData(str(tmp_path / "file_index.json"), normalize_dir=str(tmp_path))
 
 

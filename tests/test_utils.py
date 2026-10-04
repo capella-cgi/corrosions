@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from corrosions.utils import EARTH_RADIUS_M, calculate_distance
+from corrosions.utils import EARTH_RADIUS_M, calculate_distance, parse_coordinate
 
 
 def test_scalar_known_distances():
@@ -67,3 +67,22 @@ def test_numpy_arrays():
     )
     assert isinstance(distance, np.ndarray)
     assert distance.tolist() == pytest.approx([0.0, 111.195], abs=1e-3)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (-6.1, -6.1),
+        ("-6.587569", -6.587569),
+        ("6°15'16.8\"S", -6.254667),
+        ("106°59'58.7\"E", 106.999639),
+        ("6�15'16.2\"S", -6.2545),  # degree sign mangled by the export
+    ],
+)
+def test_parse_coordinate(value, expected):
+    assert parse_coordinate(value) == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), "", "N/A", "-", "not detected", True])
+def test_parse_coordinate_unreadable_gives_none(value):
+    assert parse_coordinate(value) is None

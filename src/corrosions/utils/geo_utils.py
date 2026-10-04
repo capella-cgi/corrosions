@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -56,3 +58,51 @@ def calculate_distance(
     if np.ndim(distance) == 0 and not isinstance(distance, pd.Series):
         return float(distance)
     return distance
+
+
+# Degrees, minutes, seconds and a hemisphere letter, with any separators
+# (e.g. 6°15'16.8"S, or 6�15'16.8"S when the degree sign was mangled).
+_DMS = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D*?([NSEWnsew])\s*$"
+)
+
+
+def parse_coordinate(value) -> float | None:
+    """Return a latitude/longitude as decimal degrees, or ``None``.
+
+    Accepts numbers, numeric strings (``"-6.587569"``) and degrees-minutes-
+    seconds text with a hemisphere letter (``6°15'16.8"S``,
+    ``106°59'58.7"E``; any separator between the parts, so a mangled degree
+    sign still works). ``S`` and ``W`` give negative values. Anything else
+    (empty, ``NaN``, ``"N/A"``, ``"-"``) gives ``None``.
+
+    Args:
+        value: Raw cell value.
+
+    Returns:
+        float | None: Decimal degrees, or ``None`` when it cannot be read.
+
+    Example:
+        >>> parse_coordinate("6°15'16.8\"S")
+        -6.254666666666667
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, np.number)):
+        number = float(value)
+        return None if np.isnan(number) else number
+
+    text = str(value).strip()
+    try:
+        number = float(text)
+    except ValueError:
+        pass
+    else:
+        return None if np.isnan(number) else number
+
+    match = _DMS.match(text)
+    if match is None:
+        return None
+    degrees, minutes, seconds, hemisphere = match.groups()
+    decimal = float(degrees) + float(minutes) / 60 + float(seconds) / 3600
+    return -decimal if hemisphere.upper() in "SW" else decimal

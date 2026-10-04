@@ -477,6 +477,9 @@ def test_cips_normalize_condition_sacp_uses_voltage(tmp_path):
         "OVER PROTECTED",
         "OVER PROTECTED",
     ]
+    # 4 of 5 readings PROTECTED or OVER PROTECTED, 1 UNPROTECTED
+    assert cips.protected_percentage == 80.0
+    assert cips.unprotected_percentage == 20.0
 
 
 def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
@@ -493,6 +496,14 @@ def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
         "PROTECTED",
         "OVER PROTECTED",
     ]
+    assert cips.protected_percentage == 66.67
+    assert cips.unprotected_percentage == 33.33
+
+
+def test_cips_percentages_are_zero_before_normalize(tmp_path):
+    path = _write_excel(tmp_path / "CIPS - SACP p.xlsx", _cips_track([-6.1, -6.101]))
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    assert (cips.protected_percentage, cips.unprotected_percentage) == (0.0, 0.0)
 
 
 def _cips_iccp_track(on: list[float], off: list[float]) -> dict:
@@ -595,6 +606,14 @@ def test_pcm_normalize_current_loss_and_condition(tmp_path):
         "Medium to High",
         "Medium to Poor",
     ]
+    assert pcm.medium_to_high_percentage == 66.67
+    assert pcm.medium_to_poor_percentage == 33.33
+
+
+def test_pcm_percentages_are_zero_before_normalize(tmp_path):
+    path = _write_excel(tmp_path / "PCM 02 track.xlsx", _pcm_track([0.5, 0.45]))
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean()
+    assert (pcm.medium_to_poor_percentage, pcm.medium_to_high_percentage) == (0.0, 0.0)
 
 
 def test_pcm_normalize_replaces_source_distance_column(tmp_path):
