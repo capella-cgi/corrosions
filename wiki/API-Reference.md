@@ -13,6 +13,7 @@ their fully qualified paths shown in each section.
 - [`corrosions.utils.dataframe_utils`](#corrosionsutilsdataframe_utils) — Excel sheet helpers
 - [`corrosions.utils.path_utils`](#corrosionsutilspath_utils) — path helpers
 - [`corrosions.utils.geo_utils`](#corrosionsutilsgeo_utils) — distance between coordinates
+- [`corrosions.sync`](#corrosionssync) — `SyncData`: same survey direction for CIPS and PCM
 
 ---
 
@@ -473,6 +474,16 @@ pcm.report["is_valid"]   # quality of the raw data
 pcm.cleaned_path         # "output/cleaned/2024/PCM/segment-01.xlsx"
 ```
 
+#### `current_loss(dbma, distance) -> tuple[pd.Series, pd.Series]` *(staticmethod)*
+
+Return the `Current Loss Rate` and `Condition` of each reading from its
+`dbma` and the meters from the previous reading. Used by `normalize()` and
+by [`SyncData`](#corrosionssync) after reversing a survey, so both always
+compute the same values. Rate: `abs(Δdbma / distance) * 1000`, rounded to 2
+decimals, `0` for the first reading and a zero step, empty when either
+`dbma` is empty. Condition: `Medium to High` when the rate is `<= 50`,
+otherwise `Medium to Poor` (also for an empty rate).
+
 #### `normalize() -> Self`
 
 Add the current-loss analysis to `df`, then save it as Excel and JSON.
@@ -639,6 +650,70 @@ enough, because `clean()` is what sets `protection` and the voltage columns
 cips = CIPS("segment.xlsx", year=2024).clean().normalize()
 cips.df["Real Distance"].iloc[-1]   # survey length in meters
 cips.normalize_json_filepath        # "output/normalize/cips/json/2024-segment.json"
+```
+
+---
+
+## `corrosions.sync`
+
+### `class SyncData`
+
+Put the CIPS and PCM surveys of each segment in the same direction. Surveys
+of one pipeline are often walked in opposite directions (e.g. PCM east to
+west, CIPS west to east). `SyncData` reads the index written by
+[`FileIndex.to_json`](#to_jsonoutput_dir-str--none--none---str) and reorders
+the normalized JSON files **in place** so both surveys start at the same end:
+
+1. **CIPS starts at its west end**: it is reversed when its first reading is
+   east of its last one.
+2. **PCM follows CIPS**: it is reversed when its last reading is closer than
+   its first one to the (synced) CIPS start. This keeps the pair together on
+   north-south lines, where the longitudes of the two ends barely differ.
+
+A reversed file gets `real_distance` recomputed (running total of the
+distance between consecutive readings). A reversed PCM file also gets
+`current_loss_rate` and `condition` recomputed with
+[`PCM.current_loss`](#current_lossdbma-distance---tuplepdseries-pdseries-staticmethod),
+because both depend on the previous reading. Files already in order are not
+rewritten. The rule gives the same order every time, so running `sync()`
+again changes nothing.
+
+| Attribute | Description |
+| --- | --- |
+| `REQUIRED_KEYS` | Keys every index record must have: `year`, `area`, `area_code`, `segment`, `segment_code`, `pipe_diameter`, `length`, `cips_protection`, `normalized_cips_file`, `normalized_pcm_file`. |
+| `COORDINATES` | Latitude/longitude keys per kind: CIPS `latitude` / `longitude`, PCM `int_gps_latitude` / `int_gps_longitude`. |
+| `data` | Records of the index JSON. |
+| `normalize_dir` | Root of the normalized files, `<normalize_dir>/<cips\|pcm>/json/<file>`. |
+| `report` | DataFrame from the last `sync()` call. |
+
+#### `__init__(json_file_index, normalize_dir=None, verbose=False)`
+
+Load `file_index.json` and check every record has `REQUIRED_KEYS`.
+`normalize_dir` defaults to `<cwd>/output/normalize`, where
+`CIPS.normalize()` / `PCM.normalize()` write. Raises `FileNotFoundError` if
+the index is missing and `KeyError` naming the first record that misses
+keys.
+
+#### `sync() -> pd.DataFrame`
+
+Sync every segment and return one report row per index record:
+
+| Column | Description |
+| --- | --- |
+| `segment_code`, `normalized_cips_file`, `normalized_pcm_file` | From the index record. |
+| `cips_reversed`, `pcm_reversed` | Whether that file was reversed and rewritten. |
+| `start_gap_m` | Meters between the CIPS and PCM start after syncing. A large gap means the two files do not cover the same stretch (or have bad coordinates). |
+| `reason` | Why a segment was skipped (missing, unreadable or empty file); empty when synced. Other segments still run. |
+
+On the 2022-2025 data: 182 segments, 82 CIPS and 76 PCM files reversed,
+median `start_gap_m` 15 m, but 27 segments above 200 m (up to 86.6 km),
+which are worth checking in the index.
+
+```python
+from corrosions.sync import SyncData
+
+report = SyncData("output/file_index.json", verbose=True).sync()
+report[report["start_gap_m"] > 200]   # CIPS/PCM pairs that do not line up
 ```
 
 ---

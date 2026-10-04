@@ -41,6 +41,7 @@ uv run python -m corrosions  # run against the current source tree
 src/corrosions/
 ├── __init__.py         # package metadata (__version__, __author__, …)
 ├── logging.py          # loguru-based logging setup and helpers
+├── sync.py             # SyncData: same survey direction for CIPS and PCM
 ├── data/
 │   ├── file_index.py   # FileIndex: Excel index of CIPS/PCM files
 │   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline

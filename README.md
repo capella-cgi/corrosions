@@ -9,6 +9,7 @@ uv run main.py                  # check both; writes output/checked-cips.xlsx an
 uv run main.py --type cips      # CIPS only
 uv run main.py --skip-years     # process every year (default skips 2021)
 uv run main.py -y 2021 2022     # skip 2021 and 2022
+uv run main.py --no-sync        # keep the normalized JSON in survey order
 uv run main.py --help           # index path, source dir, skip years, output dir, workers
 ```
 
@@ -34,7 +35,14 @@ report per data type:
   `normalized_cips_file`, `normalized_pcm_file`).
 - `file_index_excluded.json`: the other rows, with their source `cips_file`
   / `pcm_file` and a `missing` list. With `--type cips` or `--type pcm`
-  every row lands here, because the other type is never normalized. CIPS files are also normalized into
+  every row lands here, because the other type is never normalized.
+- `sync-report.xlsx`: the last step puts each indexed segment's CIPS and PCM
+  JSON in the same direction, CIPS starting at its west end and PCM at the
+  end closer to the CIPS start. It rewrites `output/normalize/*/json/` in
+  place and recomputes `real_distance` (and PCM `current_loss_rate` /
+  `condition`). The report lists `cips_reversed`, `pcm_reversed` and
+  `start_gap_m` per segment; gaps over 200 m usually mean the CIPS and PCM
+  files do not cover the same pipe. Skip this step with `--no-sync`. CIPS files are also normalized into
   `output/normalize/cips/excel|json/`.
 
 Close the reports in Excel before rerunning; Windows locks open files.

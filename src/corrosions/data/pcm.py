@@ -63,6 +63,40 @@ class PCM(BaseData):
 
     UNIQUE_COLUMNS: tuple[str, str] = ("Int GPS Latitude", "Int GPS Longitude")
 
+    @staticmethod
+    def current_loss(
+        dbma: pd.Series, distance: pd.Series
+    ) -> tuple[pd.Series, pd.Series]:
+        """Return the ``Current Loss Rate`` and ``Condition`` of each reading.
+
+        Shared by ``normalize`` and ``corrosions.sync.SyncData``, so a survey
+        that is reversed later gets the same values as a fresh one.
+
+        - Rate: ``|Δdbma / distance| * 1000`` against the previous reading,
+          rounded to 2 decimals; ``0`` for the first reading and for a zero
+          step; empty when either ``dbma`` is empty.
+        - Condition: ``"Medium to High"`` when the rate is ``<= 50``,
+          otherwise ``"Medium to Poor"``, including an empty rate.
+
+        Args:
+            dbma (pd.Series): ``dbma`` of each reading, in survey order.
+            distance (pd.Series): Meters from the previous reading (``0`` for
+                the first), same index as ``dbma``.
+
+        Returns:
+            tuple[pd.Series, pd.Series]: Rate and condition, indexed like
+                ``dbma``.
+        """
+        rate = ((dbma.diff() / distance).abs() * 1000).round(2)
+        rate = rate.where(distance > 0, 0.0)
+        # An empty rate (no dbma) compares False, so it is "Medium to Poor".
+        condition = pd.Series(
+            np.where(rate <= 50, "Medium to High", "Medium to Poor"),
+            index=dbma.index,
+            dtype=object,
+        )
+        return rate, condition
+
     def normalize(self) -> Self:
         """Add current-loss analysis, then save Excel and JSON.
 
@@ -141,14 +175,8 @@ class PCM(BaseData):
         current = df["4Hz Current (A)"]
         df["dbma"] = (20 * np.log10(current.where(current > 0) * 1000)).round(2)
 
-        delta_dbma = df["dbma"].diff()
-        current_loss_rate = ((delta_dbma / distance).abs() * 1000).round(2)
-        # 0 for the first reading (no previous one) and for a zero step.
-        df["Current Loss Rate"] = current_loss_rate.where(distance > 0, 0.0)
-
-        # An empty rate (no dbma) compares False, so it is "Medium to Poor".
-        df["Condition"] = np.where(
-            df["Current Loss Rate"] <= 50, "Medium to High", "Medium to Poor"
+        df["Current Loss Rate"], df["Condition"] = self.current_loss(
+            df["dbma"], distance
         )
 
         # Save to excel with original column name
