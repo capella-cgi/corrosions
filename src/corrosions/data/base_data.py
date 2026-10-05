@@ -37,7 +37,8 @@ class BaseData:
         output_dir (str): Resolved output directory for downstream artifacts.
         cleaned_dir (str): ``<output_dir>/cleaned/<year>/<KIND>``.
         cleaned_path (str | None): Path of the saved Excel once ``save`` ran.
-        normalize_dir (str): ``<output_dir>/normalize/<kind>``.
+        normalize_dir (str): ``<output_dir>/normalize/<kind>``, unless a
+            subclass ``normalize`` got another ``normalize_dir``.
         normalize_excel_dir (str): ``<normalize_dir>/excel``.
         normalize_json_dir (str): ``<normalize_dir>/json``.
         normalize_excel_filepath (str): Excel written by a subclass
@@ -48,7 +49,9 @@ class BaseData:
         cleaned (bool): True once ``clean`` completed; ``normalize`` requires
             it.
         normalized (bool): True once a subclass ``normalize`` wrote both files.
-        report (dict): Summary from the last ``check`` call; empty until then.
+        report (dict): Summary from the last ``check`` call (empty until
+            then), plus the ``normalize`` results once a subclass
+            ``normalize`` ran (see ``_report_normalize``).
         verbose (bool): If True, methods may emit progress messages.
     """
 
@@ -93,20 +96,8 @@ class BaseData:
             self.output_dir, "cleaned", str(year), self.KIND.upper()
         )
         self.cleaned_path: str | None = None
-        self.normalize_dir = os.path.join(
-            self.output_dir,
-            "normalize",
-            self.KIND.lower(),
-        )
-        self.normalize_excel_dir = os.path.join(self.normalize_dir, "excel")
-        self.normalize_json_dir = os.path.join(self.normalize_dir, "json")
-
-        normalize_filename = f"{year}-{slugify(Path(filepath).stem)}"
-        self.normalize_excel_filepath = os.path.join(
-            self.normalize_excel_dir, f"{normalize_filename}.xlsx"
-        )
-        self.normalize_json_filepath = os.path.join(
-            self.normalize_json_dir, f"{normalize_filename}.json"
+        self._set_normalize_dir(
+            os.path.join(self.output_dir, "normalize", self.KIND.lower())
         )
 
         self.report: dict = {}
@@ -182,6 +173,9 @@ class BaseData:
         - ``duplicates`` (list[dict] | None): One dict per duplicate row with
           keys ``row`` (DataFrame index) and the unique-column values.
 
+        The report is replaced, so calling ``check`` after ``normalize`` drops
+        the keys ``normalize`` added.
+
         Returns:
             Self: ``self``, to allow method chaining.
 
@@ -216,6 +210,56 @@ class BaseData:
         }
 
         return self
+
+    def _set_normalize_dir(self, normalize_dir: str | None) -> None:
+        """Set ``normalize_dir`` and the Excel/JSON dirs and paths under it.
+
+        Called by ``__init__`` with ``<output_dir>/normalize/<kind>`` and by
+        every subclass ``normalize`` with its ``normalize_dir`` argument.
+
+        Args:
+            normalize_dir (str | None): New ``normalize_dir``; ``None`` keeps
+                the current one.
+        """
+        if normalize_dir is None:
+            return
+
+        self.normalize_dir = normalize_dir
+        self.normalize_excel_dir = os.path.join(normalize_dir, "excel")
+        self.normalize_json_dir = os.path.join(normalize_dir, "json")
+
+        normalize_filename = f"{self.year}-{slugify(Path(self.filepath).stem)}"
+        self.normalize_excel_filepath = os.path.join(
+            self.normalize_excel_dir, f"{normalize_filename}.xlsx"
+        )
+        self.normalize_json_filepath = os.path.join(
+            self.normalize_json_dir, f"{normalize_filename}.json"
+        )
+
+    def _report_normalize(self, **values) -> None:
+        """Add the results of a subclass ``normalize`` to ``self.report``.
+
+        Called at the end of ``normalize``, once both files are written. Keeps
+        the ``check`` keys (if ``check`` ran) and adds:
+
+        - ``normalized`` (bool): ``True``.
+        - ``n_normalized`` (int): Rows in the normalized files.
+        - ``normalize_excel_filepath`` / ``normalize_json_filepath`` (str):
+          The files written.
+        - ``values``: The subclass results (e.g. condition percentages).
+
+        Args:
+            **values: Subclass-specific keys, added last.
+        """
+        self.report.update(
+            {
+                "normalized": True,
+                "n_normalized": len(self.df),
+                "normalize_excel_filepath": self.normalize_excel_filepath,
+                "normalize_json_filepath": self.normalize_json_filepath,
+                **values,
+            }
+        )
 
     def clean(self) -> Self:
         """Drop unusable rows from the DataFrame.

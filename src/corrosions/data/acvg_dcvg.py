@@ -721,7 +721,7 @@ class AcvgDcvg:
 
         return self
 
-    def normalize(self) -> Self:
+    def normalize(self, normalize_dir: str | None = None) -> Self:
         """Normalize every cleaned file against its segment's CIPS line.
 
         Runs ``AcvgDcvgFile.normalize`` per file ``clean`` kept, with the
@@ -731,6 +731,15 @@ class AcvgDcvg:
         normalized CIPS, are normalized too, with an empty ``real_distance``
         and ``condition``. Run it after the CIPS/PCM sync (``main.py`` does),
         so the distances follow the synced CIPS direction.
+
+        Args:
+            normalize_dir (str | None): Passed to every
+                ``AcvgDcvgFile.normalize``, where it overrides the file's
+                ``normalize_dir`` (default
+                ``<output_dir>/normalize/acvg_dcvg``): where the normalized
+                ACVG/DCVG files are written. The CIPS JSON is still read from
+                the ``normalize_dir`` given to ``match``. ``None`` keeps the
+                default.
 
         Returns:
             Self: ``self``, to allow method chaining. ``self.file_report``
@@ -755,14 +764,12 @@ class AcvgDcvg:
                 else None
             )
             try:
-                data.normalize(cips_json)
+                data.normalize(cips_json, normalize_dir=normalize_dir)
                 report.loc[position, "normalized_file"] = os.path.basename(
                     data.normalize_json_filepath
                 )
                 report.loc[position, "count"] = data.count
-                report.loc[position, "n_on_cips"] = int(
-                    data.df["Real Distance"].notna().sum()
-                )
+                report.loc[position, "n_on_cips"] = data.report["n_on_cips"]
             except (OSError, ValueError, KeyError) as e:
                 report.loc[position, "reason"] = f"normalize failed: {e}"
 
@@ -952,6 +959,7 @@ class AcvgDcvgFile(BaseData):
         self,
         cips_json: str | None = None,
         max_distance_m: float = AcvgDcvg.MAX_DISTANCE_M,
+        normalize_dir: str | None = None,
     ) -> Self:
         """Place each anomaly on the CIPS line, then save Excel and JSON.
 
@@ -973,7 +981,11 @@ class AcvgDcvgFile(BaseData):
         ``REQUIRED_COLUMNS`` are added empty. ``self.count`` is set to the
         number of anomalies (rows of ``self.df``).
 
-        Then writes two files and sets ``self.normalized``:
+        Then writes two files, sets ``self.normalized`` and adds to
+        ``self.report`` (see ``BaseData._report_normalize``): ``normalized``,
+        ``n_normalized``, ``normalize_excel_filepath``,
+        ``normalize_json_filepath``, ``count``, ``n_on_cips`` (anomalies with
+        a ``Real Distance``) and ``cips_json``. The files:
 
         - ``normalize_excel_filepath``
           (``<output_dir>/normalize/acvg_dcvg/excel/<year>-<slug>.xlsx``):
@@ -995,6 +1007,11 @@ class AcvgDcvgFile(BaseData):
             max_distance_m (float): Largest distance to the CIPS line for a
                 ``Real Distance`` / ``Condition``. Defaults to
                 ``AcvgDcvg.MAX_DISTANCE_M``.
+            normalize_dir (str | None): Overrides ``self.normalize_dir``
+                (default ``<output_dir>/normalize/acvg_dcvg``); the files go
+                to its ``excel`` / ``json`` sub-folders and
+                ``normalize_excel_dir``, ``normalize_json_dir`` and both file
+                paths follow. ``None`` keeps the current one.
 
         Returns:
             Self: ``self``, to allow method chaining.
@@ -1012,6 +1029,7 @@ class AcvgDcvgFile(BaseData):
             raise RuntimeError(f"Run clean() before normalize(): {self.filepath}")
         if cips_json is not None and not os.path.isfile(cips_json):
             raise FileNotFoundError(f"File not found: {cips_json}")
+        self._set_normalize_dir(normalize_dir)
 
         df = self.df.copy()
         for column in self.REQUIRED_COLUMNS:
@@ -1073,6 +1091,11 @@ class AcvgDcvgFile(BaseData):
         frame.to_json(self.normalize_json_filepath, orient="records")
 
         self.normalized = True
+        self._report_normalize(
+            count=self.count,
+            n_on_cips=int(df["Real Distance"].notna().sum()),
+            cips_json=cips_json,
+        )
 
         return self
 

@@ -500,6 +500,53 @@ def test_cips_normalize_condition_iccp_uses_off_voltage(tmp_path):
     assert cips.unprotected_percentage == 33.33
 
 
+def test_cips_normalize_updates_report(tmp_path):
+    data = _cips_track([-6.1, -6.101, -6.102])
+    data["Voltage"] = [-0.80, -0.9, -1.0]
+    path = _write_excel(tmp_path / "CIPS - SACP report.xlsx", data)
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix().check()
+    assert "normalized" not in cips.report
+
+    cips.clean().normalize()
+    report = cips.report
+    assert report["is_valid"] is True  # check keys are kept
+    assert report["normalized"] is True
+    assert report["n_normalized"] == 3
+    assert report["normalize_excel_filepath"] == cips.normalize_excel_filepath
+    assert report["normalize_json_filepath"] == cips.normalize_json_filepath
+    assert report["protection"] == "SACP"
+    assert report["length_m"] == pytest.approx(222.39, abs=1e-2)
+    assert (report["protected_percentage"], report["unprotected_percentage"]) == (
+        66.67,
+        33.33,
+    )
+
+
+def test_cips_normalize_dir_overrides_the_default(tmp_path):
+    path = _write_excel(tmp_path / "CIPS - SACP dir.xlsx", _cips_track([-6.1, -6.101]))
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
+    target = tmp_path / "custom"
+    cips.normalize(normalize_dir=str(target))
+
+    assert cips.normalize_dir == str(target)
+    assert cips.normalize_excel_dir == str(target / "excel")
+    assert cips.normalize_json_dir == str(target / "json")
+    assert cips.normalize_excel_filepath == str(target / "excel" / "2024-cips-sacp-dir.xlsx")
+    assert cips.normalize_json_filepath == str(target / "json" / "2024-cips-sacp-dir.json")
+    assert os.path.isfile(cips.normalize_excel_filepath)
+    assert os.path.isfile(cips.normalize_json_filepath)
+    assert cips.report["normalize_json_filepath"] == cips.normalize_json_filepath
+    assert not (tmp_path / "out" / "normalize").exists()
+
+
+def test_cips_normalize_dir_none_keeps_the_default(tmp_path):
+    path = _write_excel(tmp_path / "CIPS - SACP keep dir.xlsx", _cips_track([-6.1, -6.101]))
+    out = tmp_path / "out"
+    cips = CIPS(path, year=2024, output_dir=str(out)).clean().normalize(normalize_dir=None)
+    assert cips.normalize_dir == str(out / "normalize" / "cips")
+    assert os.path.isfile(cips.normalize_json_filepath)
+
+
 def test_cips_percentages_are_zero_before_normalize(tmp_path):
     path = _write_excel(tmp_path / "CIPS - SACP p.xlsx", _cips_track([-6.1, -6.101]))
     cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean()
@@ -608,6 +655,34 @@ def test_pcm_normalize_current_loss_and_condition(tmp_path):
     ]
     assert pcm.medium_to_high_percentage == 66.67
     assert pcm.medium_to_poor_percentage == 33.33
+
+
+def test_pcm_normalize_updates_report(tmp_path):
+    path = _write_excel(tmp_path / "PCM report.xlsx", _pcm_track([0.5, 0.45, 0.2]))
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().save().check()
+    pcm.normalize()
+    report = pcm.report
+    assert report["n_duplicates"] == 0  # check keys are kept
+    assert report["normalized"] is True
+    assert report["n_normalized"] == 3
+    assert report["normalize_json_filepath"] == pcm.normalize_json_filepath
+    assert report["length_m"] == pytest.approx(222.39, abs=1e-2)
+    assert report["medium_to_high_percentage"] == 66.67
+    assert report["medium_to_poor_percentage"] == 33.33
+
+
+def test_pcm_normalize_dir_overrides_the_default(tmp_path):
+    path = _write_excel(tmp_path / "PCM dir.xlsx", _pcm_track([0.5, 0.45]))
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean()
+    target = tmp_path / "custom"
+    pcm.normalize(normalize_dir=str(target))
+
+    assert pcm.normalize_dir == str(target)
+    assert pcm.normalize_excel_filepath == str(target / "excel" / "2025-pcm-dir.xlsx")
+    assert pcm.normalize_json_filepath == str(target / "json" / "2025-pcm-dir.json")
+    assert os.path.isfile(pcm.normalize_excel_filepath)
+    assert os.path.isfile(pcm.normalize_json_filepath)
+    assert not (tmp_path / "out" / "normalize").exists()
 
 
 def test_pcm_percentages_are_zero_before_normalize(tmp_path):

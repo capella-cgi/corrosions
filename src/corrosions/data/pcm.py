@@ -165,7 +165,7 @@ class PCM(BaseData):
         )
         return rate, condition
 
-    def normalize(self) -> Self:
+    def normalize(self, normalize_dir: str | None = None) -> Self:
         """Add current-loss analysis, then save Excel and JSON.
 
         Adds to ``self.df``:
@@ -190,7 +190,12 @@ class PCM(BaseData):
         survey (``SyncData``) keeps the same reading pairs, so it does not
         change them.
 
-        Then writes two files and sets ``self.normalized``:
+        Then writes two files, sets ``self.normalized`` and adds to
+        ``self.report`` (see ``BaseData._report_normalize``): ``normalized``,
+        ``n_normalized``, ``normalize_excel_filepath``,
+        ``normalize_json_filepath``, ``length_m`` (last ``Real Distance``, 2
+        decimals), ``medium_to_high_percentage`` and
+        ``medium_to_poor_percentage``. The files:
 
         - ``normalize_excel_filepath``
           (``<output_dir>/normalize/pcm/excel/<year>-<slug>.xlsx``): ``self.df``
@@ -207,6 +212,13 @@ class PCM(BaseData):
         index is not used, so the gaps ``clean`` leaves in it are fine. Call
         after ``clean``, which makes sure every coordinate is present and
         deduplicated.
+
+        Args:
+            normalize_dir (str | None): Overrides ``self.normalize_dir``
+                (default ``<output_dir>/normalize/pcm``); the files go to its
+                ``excel`` / ``json`` sub-folders and ``normalize_excel_dir``,
+                ``normalize_json_dir`` and both file paths follow. ``None``
+                keeps the current one.
 
         Returns:
             Self: ``self``, to allow method chaining.
@@ -225,6 +237,7 @@ class PCM(BaseData):
         """
         if not self.cleaned:
             raise RuntimeError(f"Run clean() before normalize(): {self.filepath}")
+        self._set_normalize_dir(normalize_dir)
 
         needed = [
             "Int GPS Latitude",
@@ -272,5 +285,10 @@ class PCM(BaseData):
         df.to_json(self.normalize_json_filepath, orient="records")
 
         self.normalized = True
+        self._report_normalize(
+            length_m=round(float(self.df["Real Distance"].iloc[-1]), 2),
+            medium_to_high_percentage=self.medium_to_high_percentage,
+            medium_to_poor_percentage=self.medium_to_poor_percentage,
+        )
 
         return self

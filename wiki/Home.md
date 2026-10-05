@@ -44,7 +44,7 @@ src/corrosions/
 ├── sync.py             # SyncData: same survey direction for CIPS and PCM
 ├── data/
 │   ├── file_index.py   # FileIndex: Excel index of CIPS/PCM files
-│   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline
+│   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline, report, normalize paths
 │   ├── pcm.py          # PCM(BaseData): single PCM survey file
 │   ├── cips.py         # CIPS(BaseData): single CIPS survey file
 │   └── acvg_dcvg.py    # AcvgDcvg: anomalies per segment; AcvgDcvgFile(BaseData): clean/normalize

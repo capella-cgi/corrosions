@@ -146,7 +146,7 @@ Everything goes to `output/` (or `-o`):
 | `checked-cips.xlsx` | per CIPS file: data sheet used (`sheet_name`, `candidate_sheets`), `has_voltage`, missing columns, duplicate GPS rows, `cleaned_path`, `cips_protection`, `protected_percentage`, `unprotected_percentage`, `normalized_cips_file`, `reason` |
 | `checked-pcm.xlsx` | per PCM file: missing columns, duplicate GPS rows, `normalized_pcm_file`, `medium_to_poor_percentage`, `medium_to_high_percentage`, `reason` |
 | `cleaned/<year>/<CIPS\|PCM\|ACVG_DCVG>/` | cleaned copies (empty/zero coordinates and duplicates removed, CIPS voltages normalized) |
-| `normalize/<cips\|pcm>/<excel\|json>/<year>-<slug>.*` | normalized surveys: distances, CIPS `condition` (PROTECTED / OVER PROTECTED / UNPROTECTED), PCM `dbma`, `current_loss_rate`, `condition` |
+| `normalize/<cips\|pcm>/<excel\|json>/<year>-<slug>.*` | (another folder with `normalize(normalize_dir=...)` from Python) normalized surveys: distances, CIPS `condition` (PROTECTED / OVER PROTECTED / UNPROTECTED), PCM `dbma`, `current_loss_rate`, `condition` |
 | `normalize/acvg_dcvg/<excel\|json>/<year>-acvg-dcvg-<segment>-<dia>-<area>.*` | normalized anomalies, sorted along the line: `real_distance` and `closest_cips_condition` from the nearest CIPS reading (empty when the segment has no CIPS line), the ACVG/DCVG readings, dates as `YYYY-MM-DD`; the Excel also has `CIPS Offset (m)` |
 | `file_index.json` | one record per segment with both a normalized CIPS and PCM file (`year`, `area`, `area_code`, `province_code`, `name`, `code`, `diameter`, `pipe_length`, `cips_protection`, `protected`, `unprotected`, `total_anomaly`, `medium_to_poor`, `medium_to_high`, `acvg_dcvg_normalized_file`, `cips_normalized_file`, `pcm_normalized_file`; `protected` / `unprotected` are the % of CIPS readings (over) protected / unprotected, `medium_to_poor` / `medium_to_high` the % of PCM readings per condition; `total_anomaly` (number of ACVG/DCVG anomalies) and `acvg_dcvg_normalized_file` are filled after the ACVG/DCVG step, `null` for segments without ACVG/DCVG) |
 | `file_index_excluded.json` | the other segments, with their source files and a `missing` list |
@@ -195,6 +195,66 @@ acvg.clean().normalize()                  # cleaned/<year>/ACVG_DCVG, normalize/
 acvg.assign_index()
 fi.assign_acvg_dcvg(acvg.normalized_files(), counts=acvg.anomaly_counts())  # acvg_dcvg_normalized_file + total_anomaly in file_index.json
 ```
+
+### Checking one file: `check()` and `report`
+
+`check()` (on `CIPS`, `PCM` and `AcvgDcvgFile`) never raises: it stores a
+quality summary on `report` (a `dict`, empty until `check()` runs) and
+returns the object, so it chains like the other steps. It checks whatever
+`df` holds when it is called, so its place in the chain matters: CIPS checks
+the raw data (after `fix()`), PCM checks the cleaned data
+(`clean().save().check()` in `check_pcm_file`).
+
+```python
+cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).fix().check()
+cips.report["is_valid"]          # False -> look at missing_columns / has_voltage
+cips.report["missing_columns"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `filepath` | source file |
+| `sheet_name` | sheet the data was read from |
+| `is_valid` | no missing required column and no duplicate GPS rows; CIPS: no missing required column and `has_voltage` (duplicates allowed, `clean()` removes them) |
+| `n_missing` / `missing_columns` | required columns not in the file (`None` when all present) |
+| `n_duplicates` / `duplicates` | rows sharing a latitude/longitude pair; `duplicates` lists each as `{"row": <index>, <lat>: ..., <lon>: ...}` (`None` when there are none) |
+| `has_voltage` | CIPS only: an ICCP (`On`/`Off Voltage`) or SACP (`Voltage`) column is present |
+
+`normalize()` then adds its results to the same `report`, keeping the
+`check()` keys (`check()` replaces the whole report, so run it first):
+
+| Key | Meaning |
+| --- | --- |
+| `normalized` | `True` once both normalized files are written |
+| `n_normalized` | rows in the normalized files |
+| `normalize_excel_filepath` / `normalize_json_filepath` | the files written |
+| `protection` | CIPS: `ICCP` or `SACP` |
+| `length_m` | CIPS, PCM: survey length (last `Real Distance`, meters) |
+| `protected_percentage` / `unprotected_percentage` | CIPS: % of readings (over) protected / unprotected |
+| `medium_to_high_percentage` / `medium_to_poor_percentage` | PCM: % of readings per condition |
+| `count` / `n_on_cips` / `cips_json` | ACVG/DCVG: anomalies, anomalies placed on the CIPS line, CIPS JSON used |
+
+```python
+cips = cips.clean().normalize()
+cips.report["protected_percentage"], cips.report["length_m"]
+```
+
+Every `normalize()` (`CIPS`, `PCM`, `AcvgDcvgFile`, and `AcvgDcvg`, which
+passes it on to each file) takes `normalize_dir=None`. It replaces the
+default `output/normalize/<cips|pcm|acvg_dcvg>`: the files go to
+`<normalize_dir>/excel` and `<normalize_dir>/json`.
+
+```python
+pcm.clean().normalize(normalize_dir="D:/tmp/pcm")   # D:/tmp/pcm/json/<year>-<slug>.json
+```
+
+The sync and the ACVG/DCVG matching still read the normalized CIPS/PCM from
+`output/normalize/`, so `main.py` keeps the default.
+
+`check_cips_file` / `check_pcm_file` put one `report` per file into
+`checked-cips.xlsx` / `checked-pcm.xlsx`, next to the clean/normalize
+results and a `reason` for any failure; the CIPS report leaves out the
+`duplicates` list (too long for an Excel cell).
 
 Full API: [wiki/API-Reference.md](wiki/API-Reference.md).
 

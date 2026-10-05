@@ -308,7 +308,7 @@ class CIPS(BaseData):
             self.df = self.df.dropna(subset=self.ICCP_COLUMNS)
         return super().clean()
 
-    def normalize(self) -> Self:
+    def normalize(self, normalize_dir: str | None = None) -> Self:
         """Add distances and protection condition, then save Excel and JSON.
 
         Adds to ``self.df``:
@@ -327,7 +327,12 @@ class CIPS(BaseData):
         (share that is ``UNPROTECTED``), in percent of all readings, rounded to
         2 decimals; together they make 100.
 
-        Then writes two files and sets ``self.normalized``:
+        Then writes two files, sets ``self.normalized`` and adds to
+        ``self.report`` (see ``BaseData._report_normalize``): ``normalized``,
+        ``n_normalized``, ``normalize_excel_filepath``,
+        ``normalize_json_filepath``, ``protection``, ``length_m`` (last
+        ``Real Distance``, 2 decimals), ``protected_percentage`` and
+        ``unprotected_percentage``. The files:
 
         - ``normalize_excel_filepath``
           (``<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx``): ``self.df``
@@ -346,6 +351,13 @@ class CIPS(BaseData):
         ``protection`` and makes sure every coordinate is present and
         deduplicated.
 
+        Args:
+            normalize_dir (str | None): Overrides ``self.normalize_dir``
+                (default ``<output_dir>/normalize/cips``); the files go to its
+                ``excel`` / ``json`` sub-folders and ``normalize_excel_dir``,
+                ``normalize_json_dir`` and both file paths follow. ``None``
+                keeps the current one.
+
         Returns:
             Self: ``self``, to allow method chaining.
 
@@ -362,6 +374,7 @@ class CIPS(BaseData):
         """
         if not self.cleaned:
             raise RuntimeError(f"Run clean() before normalize(): {self.filepath}")
+        self._set_normalize_dir(normalize_dir)
 
         def _condition(voltage: float) -> str:
             if -1.2 < voltage <= -0.85:
@@ -402,6 +415,12 @@ class CIPS(BaseData):
         df.to_json(self.normalize_json_filepath, orient="records")
 
         self.normalized = True
+        self._report_normalize(
+            protection=self.protection,
+            length_m=round(float(self.df["Real Distance"].iloc[-1]), 2),
+            protected_percentage=self.protected_percentage,
+            unprotected_percentage=self.unprotected_percentage,
+        )
 
         return self
 

@@ -228,7 +228,7 @@ Returns `self` for chaining.
 Run `PCM(...).clean().save().check()` on every referenced PCM file, in
 parallel via joblib's `loky` backend when `n_jobs > 1` (or `-1` for all
 cores). Each cleaned copy is written to `output/cleaned/<year>/PCM/`, and
-the report describes the cleaned data. Then [`normalize()`](#normalize---self-1)
+the report describes the cleaned data. Then [`normalize()`](#normalizenormalize_dirnone---self)
 writes the normalized Excel/JSON under `<cwd>/output/normalize/pcm/`; a file
 that fails to normalize keeps its check columns.
 
@@ -260,7 +260,7 @@ Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
 file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
 backend like `check_pcm_file`. The data sheet is located, column names
 are aligned, then checked. Then `clean().save()` writes a cleaned copy to
-`<cwd>/output/cleaned/<year>/CIPS/` and [`normalize()`](#normalize---self)
+`<cwd>/output/cleaned/<year>/CIPS/` and [`normalize()`](#normalizenormalize_dirnone---self-1)
 writes the normalized Excel/JSON under `<cwd>/output/normalize/cips/`. The
 steps are separate, so a file that fails to clean still reports its column
 checks. Check columns describe the file before cleaning.
@@ -444,14 +444,14 @@ before `clean()` to check the raw data and after to check the cleaned data.
 | `output_dir` | `str` | Resolved output directory. |
 | `cleaned_dir` | `str` | `<output_dir>/cleaned/<year>/<KIND>`. |
 | `cleaned_path` | `str \| None` | Path of the saved Excel once `save()` ran. |
-| `normalize_dir` | `str` | `<output_dir>/normalize/<kind>`. |
+| `normalize_dir` | `str` | `<output_dir>/normalize/<kind>`, unless a subclass `normalize(normalize_dir=...)` overrode it. |
 | `normalize_excel_dir` | `str` | `<normalize_dir>/excel`. |
 | `normalize_json_dir` | `str` | `<normalize_dir>/json`. |
 | `normalize_excel_filepath` | `str` | Excel written by a subclass `normalize()`: `<normalize_excel_dir>/<year>-<slug>.xlsx` (`<slug>` = slugified source filename without its extension). |
 | `normalize_json_filepath` | `str` | JSON written by a subclass `normalize()`: `<normalize_json_dir>/<year>-<slug>.json`. |
 | `cleaned` | `bool` | `True` once `clean()` completed; `normalize()` requires it. |
 | `normalized` | `bool` | `True` once a subclass `normalize()` wrote both files. |
-| `report` | `dict` | Summary from the last `check()` call; empty until then. |
+| `report` | `dict` | Summary from the last `check()` call (empty until then), plus the `normalize()` results once a subclass `normalize()` ran (see [`check()`](#check---self)). |
 | `verbose` | `bool` | If `True`, methods may emit progress messages. |
 
 #### `__init__(filepath, year, output_dir=None, verbose=False)`
@@ -499,6 +499,23 @@ and that rows are unique on `UNIQUE_COLUMNS`.
 | `n_duplicates` | `int` | Count of duplicate rows by `UNIQUE_COLUMNS`. |
 | `missing_columns` | `list[str] \| None` | Names of missing required columns (or `None` when none). |
 | `duplicates` | `list[dict] \| None` | One dict per duplicate row (`row` index + unique-column values), or `None` when none. |
+
+A subclass `normalize()` adds its results to `report` once both files are
+written, keeping the `check()` keys (`check()` itself replaces the whole
+report, so call it before `normalize()`):
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `normalized` | `bool` | `True`. |
+| `n_normalized` | `int` | Rows in the normalized files. |
+| `normalize_excel_filepath` / `normalize_json_filepath` | `str` | Files written. |
+| `protection` | `str` | CIPS: `"ICCP"` or `"SACP"`. |
+| `length_m` | `float` | CIPS, PCM: last `Real Distance` (survey length in meters, 2 decimals). |
+| `protected_percentage` / `unprotected_percentage` | `float` | CIPS: same as the attributes. |
+| `medium_to_high_percentage` / `medium_to_poor_percentage` | `float` | PCM: same as the attributes. |
+| `count` | `int` | ACVG/DCVG: number of anomalies (`AcvgDcvgFile.count`). |
+| `n_on_cips` | `int` | ACVG/DCVG: anomalies placed on the CIPS line (with a `Real Distance`). |
+| `cips_json` | `str \| None` | ACVG/DCVG: CIPS JSON used. |
 
 #### `clean() -> Self`
 
@@ -556,12 +573,16 @@ decimals, `0` for the first reading and a zero step, empty when either
 `dbma` is empty. Condition: `Medium to High` when the rate is `<= 50`,
 otherwise `Medium to Poor` (also for an empty rate).
 
-#### `normalize() -> Self`
+#### `normalize(normalize_dir=None) -> Self`
 
 Add the current-loss analysis to `df`, then save it as Excel and JSON.
 Requires a completed `clean()` (`RuntimeError` otherwise) and raises
 `ValueError` if a column it reads is missing (`Int GPS Latitude` /
 `Longitude`, `4Hz Current (A)`, `Depth (m)`, `Comment (0-100)`).
+`normalize_dir` overrides `self.normalize_dir` (default
+`<output_dir>/normalize/pcm`): the files go to its `excel` / `json`
+sub-folders, and `normalize_excel_dir`, `normalize_json_dir` and both file
+paths follow. `None` keeps the current one.
 
 | Added column | Description |
 | --- | --- |
@@ -575,6 +596,8 @@ It also sets `medium_to_high_percentage` (share of `Medium to High`
 readings, in percent, rounded to 2 decimals) and `medium_to_poor_percentage`
 (`100 -` that). Both are `0.0` before `normalize()`. Reversing the survey
 (`SyncData`) keeps the same reading pairs, so it does not change them.
+`report` gets the normalize keys (`length_m`, the two percentages, …; see
+[`check()`](#check---self)).
 
 "Previous" means the row above: the index is not used, so the gaps `clean()`
 leaves in it are fine.
@@ -592,6 +615,10 @@ for steps of 10 m or more.
 pcm = PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize()
 pcm.df["Condition"].value_counts()
 pcm.normalize_json_filepath   # "output/normalize/pcm/json/2025-segment-01.json"
+pcm.report["length_m"], pcm.report["medium_to_high_percentage"]
+
+# another folder: D:/tmp/pcm/excel/... and D:/tmp/pcm/json/...
+PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize(normalize_dir="D:/tmp/pcm")
 ```
 
 ---
@@ -695,11 +722,15 @@ Call `fix()` first to check the data as `clean()` will see it.
 - **Raises** `ValueError` if no voltage layout matches, if the filename is
   needed but names neither (or both) `ICCP` / `SACP`, or if no row is left.
 
-#### `normalize() -> Self`
+#### `normalize(normalize_dir=None) -> Self`
 
 Add distances and a protection condition to `df`, then save it as Excel
 and JSON. Distances are computed with
 [`calculate_distance`](#corrosionsutilsgeo_utils) on whole columns.
+`normalize_dir` overrides `self.normalize_dir` (default
+`<output_dir>/normalize/cips`): the files go to its `excel` / `json`
+sub-folders, and `normalize_excel_dir`, `normalize_json_dir` and both file
+paths follow. `None` keeps the current one.
 
 | Added column | Description |
 | --- | --- |
@@ -710,7 +741,9 @@ and JSON. Distances are computed with
 It also sets `protected_percentage` (share of readings that are `PROTECTED`
 or `OVER PROTECTED`, in percent, rounded to 2 decimals) and
 `unprotected_percentage` (`100 - protected_percentage`, the `UNPROTECTED`
-share). Both are `0.0` before `normalize()`.
+share). Both are `0.0` before `normalize()`. `report` gets the normalize
+keys (`protection`, `length_m`, the two percentages, …; see
+[`check()`](#check---self)).
 
 | File | Content |
 | --- | --- |
@@ -732,6 +765,10 @@ enough, because `clean()` is what sets `protection` and the voltage columns
 cips = CIPS("segment.xlsx", year=2024).clean().normalize()
 cips.df["Real Distance"].iloc[-1]   # survey length in meters
 cips.normalize_json_filepath        # "output/normalize/cips/json/2024-segment.json"
+cips.report["protected_percentage"] # also in report, with protection, length_m, …
+
+# another folder: D:/tmp/cips/excel/... and D:/tmp/cips/json/...
+CIPS("segment.xlsx", year=2024).clean().normalize(normalize_dir="D:/tmp/cips")
 ```
 
 ---
@@ -854,7 +891,7 @@ on every file `rebuild` wrote; the cleaned copy goes to
 `cips_file`, `normalized_file`, `count`, `n_on_cips`, `reason`. Raises `RuntimeError`
 before `rebuild`.
 
-#### `normalize() -> Self`
+#### `normalize(normalize_dir=None) -> Self`
 
 Run `AcvgDcvgFile.normalize` on every cleaned file, with the normalized CIPS
 JSON of the index row it belongs to (`<normalize_dir>/cips/json/<cips_file>`,
@@ -863,7 +900,11 @@ groups, rows without a normalized CIPS) are normalized with an empty
 `real_distance` / `condition`. Fills `normalized_file`, `count` and `n_on_cips` in
 `file_report` (`reason` = `normalize failed: …` on error). Run it after the
 CIPS/PCM sync, as `main.py` does, so distances follow the synced direction.
-Raises `RuntimeError` before `clean`.
+`normalize_dir` is passed to every `AcvgDcvgFile.normalize`, so the
+normalized ACVG/DCVG files go to `<normalize_dir>/<excel|json>` instead of
+`<output_dir>/normalize/acvg_dcvg`; the CIPS JSON is still read from the
+`normalize_dir` given to `match` (the normalize root, not a per-kind
+folder). Raises `RuntimeError` before `clean`.
 
 #### `normalized_files() -> dict[int, str]`
 
@@ -918,7 +959,7 @@ data.normalize("output/normalize/cips/json/2024-<cips slug>.json")
 `clean()` (from `BaseData`) drops all-empty rows, rows with an empty or `0`
 coordinate, and duplicate points (first kept).
 
-#### `normalize(cips_json=None, max_distance_m=AcvgDcvg.MAX_DISTANCE_M) -> Self`
+#### `normalize(cips_json=None, max_distance_m=AcvgDcvg.MAX_DISTANCE_M, normalize_dir=None) -> Self`
 
 Place every anomaly on its segment's CIPS line. Each anomaly takes the nearest
 reading of `cips_json` (the normalized CIPS JSON) and gets:
@@ -937,8 +978,11 @@ Writes `normalize_excel_filepath`
 names) and `normalize_json_filepath`
 (`<output_dir>/normalize/acvg_dcvg/json/<year>-<slug>.json`, `JSON_COLUMNS`
 keys; `survey_dcvg` / `survey_acvg` always `YYYY-MM-DD` or `null`: date text is parsed, `20-May` takes the file year (`2024-05-20`), non-date text is `null`; empty cells
-`null`). Raises `RuntimeError` before `clean`, `FileNotFoundError` for a
-missing `cips_json`.
+`null`). `normalize_dir` overrides `self.normalize_dir` (default
+`<output_dir>/normalize/acvg_dcvg`); the paths follow, as in CIPS and PCM.
+`report` gets the normalize keys (`count`, `n_on_cips`,
+`cips_json`, …; see [`check()`](#check---self)). Raises `RuntimeError`
+before `clean`, `FileNotFoundError` for a missing `cips_json`.
 
 ---
 

@@ -412,6 +412,20 @@ def test_clean_and_normalize_every_extracted_file(setup):
     assert record["real_distance"] is None and record["closest_cips_condition"] is None
 
 
+def test_normalize_dir_is_passed_to_every_file(setup, tmp_path):
+    acvg = _acvg(setup).load().match(setup["index_csv"], setup["normalize_dir"])
+    acvg.rebuild(output_dir=str(setup["out"])).clean()
+    target = tmp_path / "elsewhere"
+    acvg.normalize(normalize_dir=str(target))
+
+    report = acvg.file_report
+    assert report["reason"].isna().all()
+    for name in report["normalized_file"]:
+        assert (target / "json" / name).is_file()
+        assert (target / "excel" / f"{name[:-5]}.xlsx").is_file()
+    assert not (setup["out"] / "normalize" / "acvg_dcvg").exists()
+
+
 def test_normalized_files_of_the_linked_rows(setup):
     acvg = _acvg(setup).load().match(setup["index_csv"], setup["normalize_dir"])
     with pytest.raises(RuntimeError, match="normalize"):
@@ -501,6 +515,12 @@ def test_file_normalize_places_anomalies_on_the_cips_line(tmp_path):
     assert [r["survey_dcvg"] for r in records] == ["2024-05-20"] * 3
     assert "CIPS Offset (m)" in pd.read_excel(data.normalize_excel_filepath).columns
 
+    assert data.report["normalized"] is True
+    assert data.report["n_normalized"] == data.report["count"] == 3
+    assert data.report["n_on_cips"] == 2
+    assert data.report["cips_json"] == str(track)
+    assert data.report["normalize_json_filepath"] == data.normalize_json_filepath
+
 
 def test_file_normalize_without_cips(tmp_path):
     path = _segment_file(tmp_path, [_anomaly("Seg A", 16, -6.1, 106.8)])
@@ -513,6 +533,20 @@ def test_file_normalize_without_cips(tmp_path):
         tmp_path / "out" / "normalize" / "acvg_dcvg" / "json"
         / "2024-acvg-dcvg-seg-a-16-jakarta.json"
     )
+
+
+def test_file_normalize_dir_overrides_the_default(tmp_path):
+    path = _segment_file(tmp_path, [_anomaly("Seg A", 16, -6.1, 106.8)])
+    data = AcvgDcvgFile(path, year=2024, output_dir=str(tmp_path / "out"))
+    target = tmp_path / "custom"
+    data.clean().normalize(normalize_dir=str(target))
+
+    assert data.normalize_dir == str(target)
+    json_path = target / "json" / "2024-acvg-dcvg-seg-a-16-jakarta.json"
+    assert data.normalize_json_filepath == str(json_path)
+    assert json_path.is_file()
+    assert (target / "excel" / "2024-acvg-dcvg-seg-a-16-jakarta.xlsx").is_file()
+    assert data.report["normalize_json_filepath"] == str(json_path)
 
 
 @pytest.mark.parametrize(
