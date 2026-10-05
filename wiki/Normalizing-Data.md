@@ -3,7 +3,8 @@
 How to normalize each data type (CIPS, PCM, ACVG/DCVG) and what the output
 looks like. `main.py` does all of this for the whole index; this page shows
 the same steps for one file, for notebooks or one-off checks. The full API is
-in [API Reference](API-Reference.md).
+in [API Reference](API-Reference.md); the columns each input file needs are in
+[Required Columns](Required-Columns.md).
 
 Every type uses the same chain:
 

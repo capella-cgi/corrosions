@@ -78,7 +78,7 @@ All artifacts land under `<cwd>/output` by default, resolved through `corrosions
 
 ## Wiki
 
-Long-form docs live in `wiki/` (`Home.md`, `API-Reference.md`, `Normalizing-Data.md`). Keep the wiki's API reference in sync when public signatures on `FileIndex`, `PCM`, or the logging helpers change, and `Normalizing-Data.md` in sync when a `clean()` / `normalize()` rule, output column or JSON key changes.
+Long-form docs live in `wiki/` (`Home.md`, `API-Reference.md`, `Normalizing-Data.md`, `Required-Columns.md`). Keep the wiki's API reference in sync when public signatures on `FileIndex`, `PCM`, or the logging helpers change, `Normalizing-Data.md` in sync when a `clean()` / `normalize()` rule, output column or JSON key changes, and `Required-Columns.md` in sync when a `REQUIRED_COLUMNS` / `NUMERIC_COLUMNS` / `CLEAN_REQUIRED_COLUMNS` / `SHEET_COLUMNS` / `RENAME_COLUMNS` / voltage layout / `FileIndex.COLUMNS` changes.
 
 ## Claude Code Guidelines
 
