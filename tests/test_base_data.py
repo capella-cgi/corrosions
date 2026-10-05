@@ -230,10 +230,9 @@ def _cips_2022(**extra) -> dict:
     return data
 
 
-def test_cips_fix_renames_and_adds_comment(tmp_path):
+def test_cips_load_renames_and_adds_comment(tmp_path):
     path = _write_excel(tmp_path / "CIPS - ICCP 2022.xlsx", _cips_2022())
     cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out"))
-    assert cips.fix() is cips
     cols = list(cips.df.columns)
     assert "Index" in cols and "Data No" not in cols  # Index is not renamed
     assert "Voltage" in cols and "Off Voltage" in cols
@@ -242,10 +241,9 @@ def test_cips_fix_renames_and_adds_comment(tmp_path):
     assert cips.check().report["is_valid"] is True
 
 
-def test_cips_fix_runs_for_every_year(tmp_path):
+def test_cips_columns_fixed_for_every_year(tmp_path):
     path = _write_excel(tmp_path / "CIPS - ICCP 2021.xlsx", _cips_2022())
-    cips = CIPS(path, year=2021, output_dir=str(tmp_path / "out")).fix()
-    assert cips.fixed is True
+    cips = CIPS(path, year=2021, output_dir=str(tmp_path / "out"))
     assert "Voltage" in cips.df.columns
     assert (cips.df["Comment"] == "").all()
 
@@ -318,7 +316,7 @@ def test_cips_valid_without_data_no_and_altitude(tmp_path):
     data = {**_cips_base(), "Voltage": [-0.9, -1.0, -1.1]}
     del data["Data No"], data["Altitude"]
     path = _write_excel(tmp_path / "CIPS - SACP minimal.xlsx", data)
-    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).fix().check()
+    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).clean().check()
     assert "Data No" not in cips.df.columns
     assert "Altitude" not in cips.df.columns
     assert cips.report["is_valid"] is True
@@ -446,10 +444,10 @@ def test_cips_normalize_before_clean_raises(tmp_path):
         CIPS(path, year=2024, output_dir=str(tmp_path / "out")).normalize()
 
 
-def test_cips_normalize_after_fix_only_raises(tmp_path):
-    # fix() alone does not run _fix_voltage, so a SACP file has no Off Voltage
+def test_cips_normalize_after_check_only_raises(tmp_path):
+    # check() does not run _fix_voltage, so a SACP file has no Off Voltage
     path = _write_excel(tmp_path / "CIPS - SACP fixed.xlsx", _cips_track([-6.1, -6.101]))
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix()
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).check()
     assert cips.cleaned is False
     with pytest.raises(RuntimeError, match="Run clean"):
         cips.normalize()
@@ -504,10 +502,10 @@ def test_cips_normalize_updates_report(tmp_path):
     data = _cips_track([-6.1, -6.101, -6.102])
     data["Voltage"] = [-0.80, -0.9, -1.0]
     path = _write_excel(tmp_path / "CIPS - SACP report.xlsx", data)
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix().check()
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().check()
     assert "normalized" not in cips.report
 
-    cips.clean().normalize()
+    cips.normalize()
     report = cips.report
     assert report["is_valid"] is True  # check keys are kept
     assert report["normalized"] is True

@@ -33,13 +33,14 @@ class CIPS(BaseData):
     ``BaseData``. Workbooks are not uniform: the data sheet may be named
     ``Data``, ``Sheet1``, after the segment, etc., next to chart, DCP and
     survey-info sheets. ``find_sheet`` picks the data sheet by its header
-    before loading. ``fix`` aligns column names across export formats,
-    ``check`` reports what is still missing, and ``clean`` normalizes
-    ICCP/SACP voltages into a single ``Voltage`` column.
+    before loading, and column names are aligned across export formats
+    while loading (``_fix_columns``). ``clean`` normalizes ICCP/SACP
+    voltages into a single ``Voltage`` column and ``check`` reports what
+    is still missing.
 
     Example:
         >>> cips = CIPS("data/2024/CIPS/segment-01.xlsx", year=2024)
-        >>> cips.fix().check().clean().save()
+        >>> cips.clean().check().normalize()
         >>> cips.protection
         'ICCP'
     """
@@ -103,7 +104,7 @@ class CIPS(BaseData):
         "DCP/Feature/DCVG Anomaly": "dcp_feature_dcvg_anomaly",
     }
 
-    # Applied by ``fix``. Other voltage columns (``-mV On``, ``Potential (-mV)``,
+    # Applied by ``_fix_columns``. Other voltage columns (``-mV On``, ``Potential (-mV)``,
     # ``On Potential (mV)``, ...) are left untouched.
     RENAME_COLUMNS: dict[str, str] = {
         "Voltage (V)": "Voltage",
@@ -117,7 +118,10 @@ class CIPS(BaseData):
         output_dir: str | None = None,
         verbose: bool = False,
     ):
-        """Load a CIPS Excel file and coerce numeric columns.
+        """Load a CIPS Excel file, coerce numeric columns and align names.
+
+        Column names are aligned right after loading (``_fix_columns``), so
+        ``check`` and ``clean`` see the same columns whatever their order.
 
         Args:
             filepath (str): Path to the source CIPS Excel file.
@@ -138,7 +142,7 @@ class CIPS(BaseData):
         self.protected_percentage: float = 0.0
         self.unprotected_percentage: float = 0.0
 
-        self.fixed: bool = False
+        self._fix_columns()
 
     @classmethod
     def data_sheets(cls, sheet_columns: dict[str, list[str]]) -> list[str]:
@@ -203,8 +207,10 @@ class CIPS(BaseData):
 
         return candidates[0]
 
-    def fix(self) -> Self:
+    def _fix_columns(self) -> None:
         """Align column names across CIPS export formats.
+
+        Called by ``__init__``.
 
         - Renames columns per ``RENAME_COLUMNS`` (``Voltage (V)`` ->
           ``Voltage``, ``Off Voltage (V)`` -> ``Off Voltage``), unless the
@@ -212,19 +218,8 @@ class CIPS(BaseData):
           left untouched.
         - Adds an empty ``Comment`` column when there is none.
 
-        Never raises; use ``check`` to see what is still missing. Running it
-        twice is a no-op.
-
-        Returns:
-            Self: ``self``, to allow method chaining.
-
-        Example:
-            >>> CIPS("2022/CIPS/segment.xlsx", year=2022).fix().df.columns
-            Index(['Index', ..., 'Voltage', 'Off Voltage', ...], dtype='object')
+        Never raises; use ``check`` to see what is still missing.
         """
-        if self.fixed:
-            return self
-
         renames = {
             old: new
             for old, new in self.RENAME_COLUMNS.items()
@@ -243,9 +238,6 @@ class CIPS(BaseData):
             )
 
         self.df = df
-        self.fixed = True
-
-        return self
 
     def check(self) -> Self:
         """Run ``BaseData.check`` plus CIPS-specific checks.
@@ -261,13 +253,15 @@ class CIPS(BaseData):
         are normal in CIPS surveys, and ``clean`` removes them. So
         ``is_valid`` means: no missing required column and a voltage column.
 
-        Call ``fix`` first to check the data as ``clean`` will see it.
+        Run it after ``clean`` (like ``PCM`` / ``AcvgDcvgFile``) to describe
+        the cleaned data; ``n_duplicates`` is then 0 because ``clean``
+        removes duplicates.
 
         Returns:
             Self: ``self``, to allow method chaining.
 
         Example:
-            >>> CIPS("segment.xlsx", year=2024).fix().check().report["has_voltage"]
+            >>> CIPS("segment.xlsx", year=2024).clean().check().report["has_voltage"]
             True
         """
         super().check()
@@ -283,10 +277,10 @@ class CIPS(BaseData):
         return self
 
     def clean(self) -> Self:
-        """Fix columns, normalize voltages, then drop unusable rows.
+        """Normalize voltages, then drop unusable rows.
 
-        Runs ``fix`` if it has not run yet, then ``_fix_voltage``. ICCP
-        readings need both ``On Voltage`` and ``Off Voltage``, so ICCP rows
+        Runs ``_fix_voltage`` first. ICCP readings need both ``On Voltage``
+        and ``Off Voltage``, so ICCP rows
         missing either one are dropped. SACP only needs ``Voltage`` (its
         ``On Voltage`` / ``Off Voltage`` are always empty). Then
         ``BaseData.clean`` drops all-empty rows, rows whose ``Latitude`` or
@@ -302,7 +296,6 @@ class CIPS(BaseData):
             ValueError: If the voltage columns cannot be resolved to ICCP or
                 SACP, or if no row is left.
         """
-        self.fix()
         self._fix_voltage()
         if self.protection == "ICCP":
             self.df = self.df.dropna(subset=self.ICCP_COLUMNS)
@@ -343,7 +336,7 @@ class CIPS(BaseData):
           ``off_voltage``, ``latitude``, ``longitude``, ``real_distance``,
           ``condition``, ``comment`` and ``dcp_feature_dcvg_anomaly``. Empty
           cells are ``null``, including empty or blank text (such as the
-          ``""`` ``Comment`` added by ``fix``). ``off_voltage`` is always
+          ``""`` ``Comment`` added by ``_fix_columns``). ``off_voltage`` is always
           ``null`` for SACP.
 
         Rows are taken in their current order. The index is not used, so the
@@ -362,8 +355,8 @@ class CIPS(BaseData):
             Self: ``self``, to allow method chaining.
 
         Raises:
-            RuntimeError: If ``clean`` has not completed yet. ``fix`` alone is
-                not enough: ``_fix_voltage`` (run by ``clean``) sets
+            RuntimeError: If ``clean`` has not completed yet:
+                ``_fix_voltage`` (run by ``clean``) sets
                 ``protection`` and the voltage columns ``normalize`` reads.
 
         Example:
@@ -409,7 +402,7 @@ class CIPS(BaseData):
         self.df = df
 
         # Save to JSON (JSON_COLUMNS). Empty or blank text cells (e.g. the ""
-        # Comment added by fix) become null, like empty numbers.
+        # Comment added by _fix_columns) become null, like empty numbers.
         df = self.json_frame(df)
         os.makedirs(self.normalize_json_dir, exist_ok=True)
         df.to_json(self.normalize_json_filepath, orient="records")
@@ -441,7 +434,7 @@ class CIPS(BaseData):
 
         - ``On Voltage`` + ``Off Voltage``: ICCP.
         - ``Voltage`` + ``Off Voltage`` without ``On Voltage`` (2022 exports
-          after ``fix``, 2024 exports): ICCP and SACP surveys share this
+          after ``_fix_columns``, 2024 exports): ICCP and SACP surveys share this
           layout, so the filename decides. ICCP takes ``Voltage`` as the ON
           reading (``On Voltage = Voltage``).
         - ``Voltage`` only: SACP.

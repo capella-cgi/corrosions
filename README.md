@@ -177,8 +177,8 @@ from corrosions.data.pcm import PCM
 from corrosions.data.acvg_dcvg import AcvgDcvg
 
 # one file
-cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).fix().check().clean().save().normalize()
-pcm = PCM("output/raw_data/2025/PCM/<file>.xlsx", year=2025).clean().save().normalize()
+cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).clean().save().check().normalize()
+pcm = PCM("output/raw_data/2025/PCM/<file>.xlsx", year=2025).clean().save().check().normalize()
 
 # the whole index (what main.py does)
 fi = FileIndex("IDDA - PCM CIPS File List.xlsx", drop_columns=["Nomor Segment"], skip_years=[2021])
@@ -196,17 +196,72 @@ acvg.assign_index()
 fi.assign_acvg_dcvg(acvg.normalized_files(), counts=acvg.anomaly_counts())  # acvg_dcvg_normalized_file + total_anomaly in file_index.json
 ```
 
+### Normalizing one file
+
+CIPS, PCM and ACVG/DCVG use the same chain:
+
+```python
+Data(path, year=...).clean().save().check().normalize(...)
+```
+
+`clean()` drops empty rows, empty or `0` coordinates, rows missing a
+required value and duplicate coordinates; `save()` writes the cleaned copy
+to `output/cleaned/<year>/<KIND>/`; `check()` fills `report`;
+`normalize()` adds distances and a condition and writes
+`output/normalize/<cips|pcm|acvg_dcvg>/<excel|json>/<year>-<slug>.*`
+(`<slug>` = slugified source filename). `save()` and `check()` are optional.
+
+| Type | Chain | `normalize()` adds | JSON keys |
+| --- | --- | --- | --- |
+| CIPS | `CIPS(path, year).clean().save().check().normalize()` | `Distance`, `Real Distance` (m), `Condition`: `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`), `UNPROTECTED`; `V` = `Off Voltage` (ICCP) or `Voltage` (SACP) | `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly` |
+| PCM | `PCM(path, year).clean().save().check().normalize()` | `Distance`, `Real Distance`, `dbma` (`20*log10(A*1000)`), `Current Loss Rate` (dB/km vs previous reading), `Condition`: `Medium to High` (rate `<= 50`) / `Medium to Poor` | `latitude`, `longitude`, `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` |
+| ACVG/DCVG | `AcvgDcvgFile(path, year).clean().save().check().normalize(cips_json)` | from the nearest reading of the segment's normalized CIPS JSON (≤ 500 m): `Real Distance`, `Condition`; Excel also `CIPS Offset (m)`; sorted along the line | `latitude`, `longitude`, `real_distance`, `anomaly_location`, `surface_condition`, `diameter`, `on_potential`, `off_potential`, `ir_drop`, `result_acvg`, `pipe_depth`, `drop_pcm`, `survey_dcvg`, `survey_acvg` (`YYYY-MM-DD`), `closest_cips_condition` |
+
+Example: a 4-reading ICCP CIPS file `CIPS - ICCP Demo Segment.xlsx` (2024)
+gives `output/normalize/cips/json/2024-cips-iccp-demo-segment.json`:
+
+```json
+[
+  {
+    "voltage": -1.1,
+    "off_voltage": -0.9,
+    "latitude": -6.2,
+    "longitude": 106.8,
+    "real_distance": 0.0,
+    "condition": "PROTECTED",
+    "comment": null,
+    "dcp_feature_dcvg_anomaly": "Test Post TP-01"
+  },
+  {
+    "voltage": -0.95,
+    "off_voltage": -0.86,
+    "latitude": -6.2009,
+    "longitude": 106.8001,
+    "real_distance": 100.6841260516,
+    "condition": "PROTECTED",
+    "comment": null,
+    "dcp_feature_dcvg_anomaly": null
+  }
+]
+```
+
+and in `cips.report`: `protection = "ICCP"`, `n_normalized = 4`,
+`length_km = 0.302`, `protected_percentage = 75.0`,
+`unprotected_percentage = 25.0`. The PCM and ACVG/DCVG versions of this
+example (input, Excel, JSON and `report`) are in
+[wiki/Normalizing-Data.md](wiki/Normalizing-Data.md).
+
 ### Checking one file: `check()` and `report`
 
 `check()` (on `CIPS`, `PCM` and `AcvgDcvgFile`) never raises: it stores a
 quality summary on `report` (a `dict`, empty until `check()` runs) and
 returns the object, so it chains like the other steps. It checks whatever
-`df` holds when it is called, so its place in the chain matters: CIPS checks
-the raw data (after `fix()`), PCM checks the cleaned data
-(`clean().save().check()` in `check_pcm_file`).
+`df` holds when it is called, so its place in the chain matters: CIPS and
+PCM check the cleaned data (`clean().save().check()` in `check_cips_file` /
+`check_pcm_file`), ACVG/DCVG checks the raw data (`check().clean().save()`).
 
 ```python
-cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).fix().check()
+cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).check()
 cips.report["is_valid"]          # False -> look at missing_columns / has_voltage
 cips.report["missing_columns"]
 ```

@@ -2,7 +2,8 @@
 
 This page documents the public API of the `corrosions` package as of
 version **0.3.0**. It is organized by module. All symbols are importable from
-their fully qualified paths shown in each section.
+their fully qualified paths shown in each section. For a step-by-step
+guide with example output, see [Normalizing Data](Normalizing-Data.md).
 
 - [`corrosions`](#corrosions) — package metadata
 - [`corrosions.logging`](#corrosionslogging) — logging configuration
@@ -256,14 +257,15 @@ Returns a DataFrame with one row per index entry and columns:
 
 #### `check_cips_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
-Run [`CIPS(...).fix().check()`](#corrosionsdatacips) on every referenced CIPS
-file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via joblib's `loky`
-backend like `check_pcm_file`. The data sheet is located, column names
-are aligned, then checked. Then `clean().save()` writes a cleaned copy to
-`<cwd>/output/cleaned/<year>/CIPS/` and [`normalize()`](#normalizenormalize_dirnone---self-1)
-writes the normalized Excel/JSON under `<cwd>/output/normalize/cips/`. The
-steps are separate, so a file that fails to clean still reports its column
-checks. Check columns describe the file before cleaning.
+Run [`CIPS(...).clean().save().check()`](#corrosionsdatacips) on every
+referenced CIPS file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via
+joblib's `loky` backend, like `check_pcm_file`. Loading locates the data
+sheet and aligns column names, `clean().save()` writes a cleaned copy to
+`<cwd>/output/cleaned/<year>/CIPS/`, and `check()` reports on the cleaned
+data. Then [`normalize()`](#normalizenormalize_dirnone---self-1) writes the
+normalized Excel/JSON under `<cwd>/output/normalize/cips/`. A file that
+fails to clean gets no check columns, only `sheet_name`, `candidate_sheets`
+and a `clean failed:` reason.
 
 It also adds two columns to `df`, used by [`to_json`](#to_jsonoutput_dir-str--none--none---str).
 They are empty for rows without a CIPS file, or whose file failed to
@@ -287,8 +289,8 @@ each result and merged into `df` by row afterwards.
 | `sheet_name` | Sheet that was loaded. |
 | `candidate_sheets` | Every qualifying sheet, best match first. |
 | `has_voltage` | At least one of `On Voltage`, `Off Voltage`, `Voltage` present. |
-| `n_missing` / `missing_columns` | Required columns missing after `fix()`. |
-| `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair. `clean()` removes them. The per-row list is left out because it can exceed Excel's cell limit. |
+| `n_missing` / `missing_columns` | Required columns missing from the cleaned data. |
+| `n_duplicates` | Rows sharing a `(Latitude, Longitude)` pair after `clean()`, so `0`. The per-row list is left out. |
 | `cleaned_path` | Path of the saved cleaned copy; empty when cleaning failed. |
 | `cips_protection` | `"ICCP"` / `"SACP"`; empty when cleaning failed. |
 | `protected_percentage` / `unprotected_percentage` | Share of readings that are `PROTECTED` or `OVER PROTECTED` / `UNPROTECTED`, in percent; empty unless normalized. |
@@ -545,7 +547,7 @@ Write the current `df` to `<cleaned_dir>/<original_filename>`, creating
 
 Single-file Pipeline Current Mapping (PCM) survey reader. Inherits
 `check()` / `clean()` / `save()` from [`BaseData`](#corrosionsdatabase_data)
-and adds `normalize()`.
+and adds `normalize()`. Example input and output: [Normalizing Data](Normalizing-Data.md#pcm).
 
 | Attribute | Value |
 | --- | --- |
@@ -629,14 +631,16 @@ PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize(normalize_dir=
 
 Single-file Close Interval Potential Survey (CIPS) reader. Inherits `save()`
 from [`BaseData`](#corrosionsdatabase_data). It overrides `find_sheet()` to
-locate the data sheet, and `check()` and `clean()` to apply CIPS rules. It
-adds `fix()` to align column names across export formats.
+locate the data sheet, and `check()` and `clean()` to apply CIPS rules.
+Column names are aligned across export formats while loading (see
+[Column alignment](#column-alignment)), so the chain matches `PCM`. Example
+input and output: [Normalizing Data](Normalizing-Data.md#cips).
 
 ```python
 from corrosions.data.cips import CIPS
 
-cips = CIPS("data/2022/CIPS/segment-01.xlsx", year=2022).fix().check().clean().save()
-cips.report["is_valid"]   # columns OK after fix()
+cips = CIPS("data/2022/CIPS/segment-01.xlsx", year=2022).clean().check().normalize()
+cips.report["is_valid"]
 cips.protection           # "ICCP" or "SACP"
 ```
 
@@ -652,9 +656,8 @@ cips.protection           # "ICCP" or "SACP"
 | `SHEET_POSSIBILITIES` | `Data`, `Sheet1`, `Sequential File`, `Sequential Files`: preferred names when several sheets qualify |
 | `RENAME_COLUMNS` | `Voltage (V)` → `Voltage`, `Off Voltage (V)` → `Off Voltage` |
 
-Extra instance attributes: `protection` (`"ICCP"` or `"SACP"`, set by
-`clean()`) and `fixed` (`True` once `fix()` ran). `cleaned` comes from
-`BaseData`.
+Extra instance attribute: `protection` (`"ICCP"` or `"SACP"`, set by
+`clean()`). `cleaned` comes from `BaseData`.
 
 #### `data_sheets(sheet_columns: dict[str, list[str]]) -> list[str]` *(classmethod)*
 
@@ -671,18 +674,19 @@ Read only the header row of each sheet and return `data_sheets(...)[0]`.
 Raises `ValueError` (listing the sheet names) when no sheet qualifies. Called
 by `__init__`, so a CIPS file without a data sheet fails at construction.
 
-#### `fix() -> Self`
+#### Column alignment
 
-Align column names across export formats:
+`__init__` aligns column names across export formats right after loading
+(private `_fix_columns()`; there is no public `fix()`):
 
 - Rename per `RENAME_COLUMNS`, unless the target column already exists.
   Other voltage columns (`-mV On`, `Potential (-mV)`, `On Potential (mV)`, …)
   are left untouched.
 - Add an empty `Comment` column when there is none.
 
-Never raises, and running it twice is a no-op. To leave out a year whose
-exports `fix()` cannot align (such as 2021 `-mV` exports), pass
-`skip_years` to the [`FileIndex`](#class-fileindex) constructor.
+Never raises. To leave out a year whose exports cannot be aligned (such as
+2021 `-mV` exports), pass `skip_years` to the
+[`FileIndex`](#class-fileindex) constructor.
 
 #### `check() -> Self`
 
@@ -692,16 +696,15 @@ exports `fix()` cannot align (such as 2021 `-mV` exports), pass
   The file is invalid without one.
 
 `is_valid` is `n_missing == 0 and has_voltage`. Duplicates are still counted
-in `n_duplicates` but do not affect `is_valid`, because `clean()` removes them.
-Call `fix()` first to check the data as `clean()` will see it.
+in `n_duplicates` but do not affect `is_valid`. Run it after `clean()` (like
+`PCM`) to describe the cleaned data; `n_duplicates` is then `0`.
 
 #### `clean() -> Self`
 
-1. Runs `fix()` if it has not run yet.
-2. Normalizes voltages into a single `Voltage` column:
+1. Normalizes voltages into a single `Voltage` column:
    - `On Voltage` + `Off Voltage` → **ICCP**.
    - `Voltage` + `Off Voltage` without `On Voltage` (2022 exports after
-     `fix()`, 2024 exports) → ICCP and SACP surveys share this layout, so the
+     column alignment, 2024 exports) → ICCP and SACP surveys share this layout, so the
      filename decides (`ICCP` / `SACP` as a whole word). ICCP takes `Voltage`
      as the ON reading.
    - `Voltage` only → **SACP**.
@@ -711,9 +714,9 @@ Call `fix()` first to check the data as `clean()` will see it.
    `Voltage` and negates `Voltage` and `Off Voltage` separately. SACP
    negates `Voltage` and sets `On Voltage` / `Off Voltage` to NaN. Both add a
    `Protection` column and set `self.protection`.
-3. ICCP only: drops rows with an empty `On Voltage` or `Off Voltage`, since
+2. ICCP only: drops rows with an empty `On Voltage` or `Off Voltage`, since
    an ICCP reading needs both. SACP only needs `Voltage`.
-4. `BaseData.clean()` drops:
+3. `BaseData.clean()` drops:
    - all-empty rows;
    - rows whose `Latitude` or `Longitude` is `0` or empty;
    - rows with an empty `Voltage`;
@@ -748,7 +751,7 @@ keys (`protection`, `length_km`, the two percentages, …; see
 | File | Content |
 | --- | --- |
 | `normalize_excel_filepath` = `<output_dir>/normalize/cips/excel/<year>-<slug>.xlsx` | `df` with its original column names, without the index. |
-| `normalize_json_filepath` = `<output_dir>/normalize/cips/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly`. Empty cells are `null`, including empty or blank text (such as the `""` `Comment` added by `fix()`). `off_voltage` is always `null` for SACP. |
+| `normalize_json_filepath` = `<output_dir>/normalize/cips/json/<year>-<slug>.json` | One record per row with only these keys, in this order: `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly`. Empty cells are `null`, including empty or blank text (such as the `""` `Comment` added while loading). `off_voltage` is always `null` for SACP. |
 
 `<slug>` is the slugified source filename without its extension. `df` keeps
 the original column names, and `normalized` is set to `True` once both files
@@ -757,9 +760,8 @@ are written.
 Rows are taken in their current order. The index is not used, so the gaps
 `clean()` leaves in it are fine. Call it after `clean()`, which sets
 `protection` and makes sure every coordinate is present and deduplicated.
-Raises `RuntimeError` if `clean()` has not completed. `fix()` alone is not
-enough, because `clean()` is what sets `protection` and the voltage columns
-`normalize()` reads.
+Raises `RuntimeError` if `clean()` has not completed, because `clean()` is
+what sets `protection` and the voltage columns `normalize()` reads.
 
 ```python
 cips = CIPS("segment.xlsx", year=2024).clean().normalize()
@@ -936,7 +938,8 @@ none), in about 20 s.
 
 One extracted segment file (`AcvgDcvg.rebuild` output). Inherits
 `check` / `clean` / `save` from [`BaseData`](#corrosionsdatabase_data), so it
-writes to the same layout as `CIPS` and `PCM`.
+writes to the same layout as `CIPS` and `PCM`. Example input and output:
+[Normalizing Data](Normalizing-Data.md#acvgdcvg).
 
 ```python
 from corrosions.data.acvg_dcvg import AcvgDcvgFile

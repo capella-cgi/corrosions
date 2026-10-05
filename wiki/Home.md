@@ -33,6 +33,7 @@ uv run python -m corrosions  # run against the current source tree
 | Page | What you'll find |
 | --- | --- |
 | [Home](Home.md) | This page — overview and directory of the wiki. |
+| [Normalizing Data](Normalizing-Data.md) | How to normalize one CIPS, PCM or ACVG/DCVG file (`clean().save().check().normalize()`), with example input, Excel, JSON and `report` output. |
 | [API Reference](API-Reference.md) | Every public class, method, and helper in the `corrosions` package, grouped by module. |
 
 ## Package layout at a glance
