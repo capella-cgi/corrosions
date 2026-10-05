@@ -6,7 +6,8 @@ import pytest
 
 from corrosions.data.cips import CIPS
 from corrosions.data.pcm import PCM
-from corrosions.sync import SyncData
+from corrosions.data.acvg_dcvg import AcvgDcvg
+from corrosions.sync import SyncData, sync_files
 
 INDEX_RECORD = {
     "year": 2025,
@@ -436,3 +437,100 @@ def test_report_has_start_gap_and_file_paths(tmp_path):
     assert row["pcm_json_path"] == str(normalize_dir / "pcm" / "json" / "p.json")
     assert row["cips_excel_path"] == str(normalize_dir / "cips" / "excel" / "c.xlsx")
     assert row["pcm_excel_path"] == str(normalize_dir / "pcm" / "excel" / "p.xlsx")
+
+
+def _acvg_source(points: list[tuple[float, float]]) -> dict:
+    data = {column: [None] * len(points) for column in AcvgDcvg.REQUIRED_COLUMNS}
+    data["Segmen"] = ["Seg A"] * len(points)
+    data["Dia (inch)"] = [16] * len(points)
+    data["Latitude"] = [lat for lat, _ in points]
+    data["Longitude"] = [lon for _, lon in points]
+    return data
+
+
+def _write_sources(folder, cips: dict, pcm: dict, acvg: dict | None = None):
+    os.makedirs(folder, exist_ok=True)
+    paths = [folder / "CIPS - ICCP a.xlsx", folder / "PCM a.xlsx"]
+    pd.DataFrame(cips).to_excel(paths[0], index=False)
+    pd.DataFrame(pcm).to_excel(paths[1], index=False)
+    if acvg is not None:
+        paths.append(folder / "acvg-dcvg-seg-a-16-jakarta.xlsx")
+        pd.DataFrame(acvg).to_excel(paths[2], index=False)
+    return [str(path) for path in paths]
+
+
+def test_sync_files_normalizes_syncs_and_places_acvg_on_synced_cips(tmp_path):
+    east_to_west = [106.103, 106.102, 106.101, 106.100]
+    # one anomaly by the west end, one by the east end of the line
+    acvg = _acvg_source([(-6.1, 106.1001), (-6.1, 106.1029)])
+    cips_path, pcm_path, acvg_path = _write_sources(
+        tmp_path / "in", _cips_source(east_to_west), _pcm_source(east_to_west), acvg
+    )
+    out = tmp_path / "out"
+
+    result = sync_files(cips_path, pcm_path, 2025, acvg_dcvg=acvg_path, output_dir=str(out))
+
+    normalize = out / "normalize"
+    assert result["cips_json"] == str(normalize / "cips" / "json" / "2025-cips-iccp-a.json")
+    assert result["pcm_json"] == str(normalize / "pcm" / "json" / "2025-pcm-a.json")
+    assert result["acvg_dcvg_json"] == str(
+        normalize / "acvg_dcvg" / "json" / "2025-acvg-dcvg-seg-a-16-jakarta.json"
+    )
+    assert result["cips_reversed"] and result["pcm_reversed"]
+    assert result["cips_axis"] == "west-east"
+    assert result["start_gap_m"] == 0.0
+    assert not (out / "cleaned").exists()  # nothing saved besides normalize/
+
+    # same as normalizing the surveys walked west -> east
+    expected = tmp_path / "expected"
+    cips_expected = _normalize(
+        CIPS, _reversed(_cips_source(east_to_west)), tmp_path / "CIPS - ICCP a.xlsx", expected
+    )
+    pcm_expected = _normalize(
+        PCM, _reversed(_pcm_source(east_to_west)), tmp_path / "PCM a.xlsx", expected
+    )
+    cips = _load(result["cips_json"])
+    _assert_records_equal(cips, _load(cips_expected))
+    _assert_records_equal(_load(result["pcm_json"]), _load(pcm_expected))
+
+    # anomalies take the position and condition of the synced CIPS line
+    anomalies = _load(result["acvg_dcvg_json"])
+    assert [a["real_distance"] for a in anomalies] == [
+        cips[0]["real_distance"],
+        pytest.approx(cips[-1]["real_distance"]),
+    ]
+    assert anomalies[0]["real_distance"] == 0.0
+    assert [a["closest_cips_condition"] for a in anomalies] == [
+        cips[0]["condition"],
+        cips[-1]["condition"],
+    ]
+
+    # running it again rebuilds the same files
+    files = [result["cips_json"], result["pcm_json"], result["acvg_dcvg_json"]]
+    before = [_load(path) for path in files]
+    again = sync_files(cips_path, pcm_path, 2025, acvg_dcvg=acvg_path, output_dir=str(out))
+    assert again == result
+    assert [_load(path) for path in files] == before
+
+
+def test_sync_files_without_acvg(tmp_path):
+    west_to_east = [106.100, 106.101, 106.102, 106.103]
+    cips_path, pcm_path = _write_sources(
+        tmp_path / "in", _cips_source(west_to_east), _pcm_source(west_to_east)
+    )
+    out = tmp_path / "out"
+
+    result = sync_files(cips_path, pcm_path, 2025, output_dir=str(out))
+
+    assert result["acvg_dcvg_json"] is None
+    assert not result["cips_reversed"] and not result["pcm_reversed"]
+    assert _load(result["cips_json"])[0]["longitude"] == 106.1
+    assert not (out / "normalize" / "acvg_dcvg").exists()
+
+
+def test_sync_files_missing_input_raises(tmp_path):
+    cips_path, _ = _write_sources(
+        tmp_path / "in", _cips_source([106.1, 106.101]), _pcm_source([106.1, 106.101])
+    )
+    with pytest.raises(FileNotFoundError):
+        sync_files(cips_path, str(tmp_path / "missing.xlsx"), 2025, output_dir=str(tmp_path))

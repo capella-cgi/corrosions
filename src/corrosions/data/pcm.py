@@ -35,7 +35,7 @@ class PCM(BaseData):
 
     Example:
         >>> pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024)
-        >>> pcm.check().clean().save().normalize()
+        >>> pcm.clean().check().save().normalize()
         >>> pcm.report["is_valid"]
         True
     """

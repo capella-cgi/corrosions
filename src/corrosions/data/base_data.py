@@ -12,7 +12,7 @@ class BaseData:
     """Shared load / check / clean / save pipeline for one survey Excel file.
 
     Subclasses declare their schema through class attributes and inherit a
-    fluent pipeline: ``Subclass(...).check().clean().save()``.
+    fluent pipeline: ``Subclass(...).clean().check().save().normalize()``.
 
     Attributes:
         KIND (Literal["pcm", "cips", "acvg_dcvg"]): Survey type; names the

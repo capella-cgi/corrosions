@@ -67,8 +67,8 @@ def test_check_cips_file(tmp_path, monkeypatch):
     legacy["Voltage (V)"] = legacy.pop("On Voltage")
     legacy["Off Voltage (V)"] = legacy.pop("Off Voltage")
     _write_sheets(data_dir / "2022" / "CIPS" / "CIPS - ICCP legacy.xlsx", {"Data": legacy})
-    # same columns, but the filename names neither ICCP nor SACP -> checks
-    # pass, clean() fails
+    # same columns, but the filename names neither ICCP nor SACP -> clean()
+    # fails
     _write_sheets(data_dir / "2022" / "CIPS" / "unknown.xlsx", {"Data": legacy})
     # Altitude is not required -> valid
     no_alt = _cips_data()
@@ -116,10 +116,10 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert report.loc["CIPS - ICCP legacy.xlsx", "is_valid"]
     assert report.loc["CIPS - ICCP legacy.xlsx", "n_missing"] == 0
 
-    # check columns are kept when only clean() fails
+    # check() runs after clean(), so a failed clean has no check columns
     assert not report.loc["unknown.xlsx", "is_valid"]
-    assert report.loc["unknown.xlsx", "has_voltage"]
-    assert report.loc["unknown.xlsx", "n_missing"] == 0
+    assert report.loc["unknown.xlsx", "sheet_name"] == "Data"
+    assert pd.isna(report.loc["unknown.xlsx", "has_voltage"])
     assert pd.isna(report.loc["unknown.xlsx", "cleaned_path"])
     assert "Cannot tell ICCP from SACP" in report.loc["unknown.xlsx", "reason"]
 
@@ -128,8 +128,6 @@ def test_check_cips_file(tmp_path, monkeypatch):
     assert "has_altitude" not in report.columns
 
     assert not report.loc["mv.xlsx", "is_valid"]
-    assert not report.loc["mv.xlsx", "has_voltage"]
-    assert report.loc["mv.xlsx", "n_missing"] == 0
     assert report.loc["mv.xlsx", "reason"].startswith("clean failed")
 
     assert not report.loc["nodata.xlsx", "is_valid"]

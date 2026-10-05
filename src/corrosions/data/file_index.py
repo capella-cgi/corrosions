@@ -461,9 +461,9 @@ class FileIndex:
     def check_pcm_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Check, clean, save and normalize every referenced PCM file.
 
-        Each file runs through ``PCM(...).clean().save().check()``, so the
-        cleaned copy is written under ``output/cleaned/<year>/PCM/`` and the
-        report describes the cleaned data. Then ``normalize()`` writes the
+        Each file runs through ``PCM(...).clean().check().save()``, so the
+        report describes the cleaned data and the cleaned copy is written
+        under ``output/cleaned/<year>/PCM/``. Then ``normalize()`` writes the
         normalized Excel/JSON under ``<cwd>/output/normalize/pcm/``; a file
         that fails to normalize keeps its check columns.
 
@@ -518,7 +518,7 @@ class FileIndex:
                 }
 
             try:
-                pcm = PCM(filepath, year=year).clean().save().check()
+                pcm = PCM(filepath, year=year).clean().check().save()
             except Exception as e:
                 return {
                     "year": year,
@@ -600,14 +600,14 @@ class FileIndex:
     def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Check, clean, save and normalize every referenced CIPS file.
 
-        Each file runs through ``CIPS(...).fix().check()``: the data sheet is
-        located (CIPS workbooks are not uniform, see ``CIPS.find_sheet``),
-        column names are aligned (``CIPS.fix``), then checked
-        (``CIPS.check``). Then ``clean().save()`` writes a cleaned copy to
-        ``<cwd>/output/cleaned/<year>/CIPS/`` and ``normalize()`` writes the
-        normalized Excel/JSON under ``<cwd>/output/normalize/cips/``. The
-        steps are separate, so a file that fails to clean still reports its
-        column checks.
+        Each file runs through ``CIPS(...).clean().check().save()``, like
+        ``check_pcm_file``: the data sheet is located (CIPS workbooks are not
+        uniform, see ``CIPS.find_sheet``) and its column names aligned while
+        loading, ``clean()`` cleans it, ``check()`` reports on the cleaned
+        data and ``save()`` writes the cleaned copy to
+        ``<cwd>/output/cleaned/<year>/CIPS/``. Then ``normalize()`` writes the normalized Excel/JSON
+        under ``<cwd>/output/normalize/cips/``. A file that fails to clean
+        gets no check columns.
 
         Also adds two columns to ``df``, used by ``to_json`` (``None`` for
         rows without a CIPS file, or whose file failed to clean/normalize):
@@ -639,10 +639,9 @@ class FileIndex:
                 ``unprotected_percentage``, ``normalized``
                 (``CIPS.normalized``), ``normalized_cips_file``,
                 ``length_km`` and ``reason``.
-                Check columns describe the file before cleaning.
-                The per-row duplicate list is left out: CIPS files can repeat
-                thousands of GPS points, too many for an Excel cell, and
-                duplicates do not affect ``is_valid`` (``clean`` removes them).
+                Check columns describe the cleaned data, so ``n_duplicates``
+                is 0 (``clean`` removes duplicates). The per-row duplicate
+                list is left out of the report.
                 ``is_valid`` is False when a check, cleaning or normalizing
                 fails. Rows with a missing file, no data sheet, a load error,
                 a clean error or a normalize error get a ``reason``.
@@ -689,7 +688,7 @@ class FileIndex:
 
             try:
                 candidates = CIPS.data_sheets(get_sheet_columns(filepath))
-                cips = CIPS(filepath, year=year).fix().check()
+                cips = CIPS(filepath, year=year)
             except Exception as e:
                 return {
                     "year": year,
@@ -699,12 +698,25 @@ class FileIndex:
                     "reason": f"{type(e).__name__}: {e}",
                 }
 
+            try:
+                cips.clean().check().save()
+            except Exception as e:
+                return {
+                    "year": year,
+                    "filepath": filepath,
+                    "is_valid": False,
+                    "sheet_name": cips.sheet_name,
+                    "candidate_sheets": candidates,
+                    "normalized": False,
+                    "reason": f"clean failed: {type(e).__name__}: {e}",
+                }
+
             result = {
                 "year": year,
                 **cips.report,
                 "candidate_sheets": candidates,
-                "cleaned_path": None,
-                "cips_protection": None,
+                "cleaned_path": cips.cleaned_path,
+                "cips_protection": cips.protection,
                 "protected_percentage": None,
                 "unprotected_percentage": None,
                 "normalized": False,
@@ -712,16 +724,6 @@ class FileIndex:
                 "length_km": None,
                 "reason": None,
             }
-
-            try:
-                cips.clean().save()
-            except Exception as e:
-                result["is_valid"] = False
-                result["reason"] = f"clean failed: {type(e).__name__}: {e}"
-                return result
-
-            result["cleaned_path"] = cips.cleaned_path
-            result["cips_protection"] = cips.protection
 
             try:
                 cips.normalize()

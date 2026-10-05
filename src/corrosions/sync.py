@@ -22,10 +22,15 @@ files carry the same values. Files are written to temporary files first and
 then moved over the originals, so a failed write leaves them intact. The
 rule gives the same order every time, so running it again changes nothing.
 
+``sync_files`` does the same for one segment given as source Excel files:
+it normalizes the CIPS and PCM, syncs them, then (optionally) normalizes the
+segment's ACVG/DCVG anomalies on the synced CIPS line.
+
 Example:
-    >>> from corrosions.sync import SyncData
+    >>> from corrosions.sync import SyncData, sync_files
     >>> report = SyncData("output/file_index.json", n_jobs=-1).sync()
     >>> report[report["cips_reversed"] | report["pcm_reversed"]]
+    >>> sync_files("CIPS - ICCP a.xlsx", "PCM a.xlsx", 2024, acvg_dcvg="acvg.xlsx")
 """
 
 import os
@@ -40,6 +45,7 @@ from joblib import Parallel, delayed
 from corrosions.logging import logger
 from corrosions.data.pcm import PCM
 from corrosions.data.cips import CIPS
+from corrosions.data.acvg_dcvg import AcvgDcvgFile
 from corrosions.utils.geo_utils import calculate_distance
 from corrosions.utils.path_utils import resolve_output_dir
 
@@ -347,6 +353,12 @@ class SyncData:
         row = dict.fromkeys(self.REPORT_COLUMNS)
         cips_name = record["cips_normalized_file"]
         pcm_name = record["pcm_normalized_file"]
+        paths = {
+            "cips_json_path": self.json_path("cips", cips_name),
+            "cips_excel_path": self.excel_path("cips", cips_name),
+            "pcm_json_path": self.json_path("pcm", pcm_name),
+            "pcm_excel_path": self.excel_path("pcm", pcm_name),
+        }
         row.update(
             {
                 "year": record["year"],
@@ -358,68 +370,113 @@ class SyncData:
                 "normalized_cips_file": cips_name,
                 "normalized_pcm_file": pcm_name,
                 # full paths, so each pair can be opened for inspection
-                "cips_json_path": self.json_path("cips", cips_name),
-                "pcm_json_path": self.json_path("pcm", pcm_name),
-                "cips_excel_path": self.excel_path("cips", cips_name),
-                "pcm_excel_path": self.excel_path("pcm", pcm_name),
+                **paths,
             }
         )
 
         try:
-            cips_file = record["cips_normalized_file"]
-            pcm_file = record["pcm_normalized_file"]
-            cips = self._read_json(self.json_path("cips", cips_file), "cips")
-            pcm = self._read_json(self.json_path("pcm", pcm_file), "pcm")
-
-            # 1-2. CIPS starts by the main direction of its line.
-            cips_first, cips_last = self.ends(cips, *self.COORDINATES["cips"])
-            axis, cips_reverse = self.cips_direction(cips_first, cips_last)
-
-            # 3. PCM starts at the end closer to the (synced) CIPS start.
-            start = cips_last if cips_reverse else cips_first
-            pcm_first, pcm_last = self.ends(pcm, *self.COORDINATES["pcm"])
-            to_first = _distance(start, pcm_first)
-            to_last = _distance(start, pcm_last)
-            pcm_reverse = to_last < to_first
-
-            # 4. Read and reverse every file to change.
-            writes: list[tuple[str, pd.DataFrame, str]] = []
-            for kind, filename, reverse in (
-                ("cips", cips_file, cips_reverse),
-                ("pcm", pcm_file, pcm_reverse),
-            ):
-                if not reverse:
-                    continue
-                excel_path = self.excel_path(kind, filename)
-                excel = self._reverse(self._read_excel(excel_path, kind), kind)
-                writes.append((excel_path, excel, "excel"))
-                # The JSON is rebuilt from the recalculated Excel.
-                json_frame = self.SURVEYS[kind].json_frame(excel)
-                writes.append((self.json_path(kind, filename), json_frame, "json"))
+            result = self.sync_pair(
+                paths["cips_json_path"],
+                paths["cips_excel_path"],
+                paths["pcm_json_path"],
+                paths["pcm_excel_path"],
+            )
+        except _WriteError as e:
+            row["reason"] = f"write failed: {e}"
+            return row
         except Exception as e:
             row["reason"] = f"{type(e).__name__}: {e}"
             return row
 
-        try:
-            self._write_all(writes)
-        except Exception as e:
-            row["reason"] = f"write failed: {type(e).__name__}: {e}"
-            return row
+        row.update(result)
 
-        row["cips_axis"] = axis
-        row["cips_reversed"] = cips_reverse
-        row["pcm_reversed"] = pcm_reverse
-        row["start_gap_m"] = round(min(to_first, to_last), 2)
-
-        if self.verbose and (cips_reverse or pcm_reverse):
+        if self.verbose and (result["cips_reversed"] or result["pcm_reversed"]):
             logger.info(
-                f"{record['code']}: reversed "
-                f"CIPS={cips_reverse} ({axis}) PCM={pcm_reverse}"
+                f"{record['code']}: reversed CIPS={result['cips_reversed']} "
+                f"({result['cips_axis']}) PCM={result['pcm_reversed']}"
             )
 
         return row
 
-    def _read_json(self, path: str, kind: str) -> pd.DataFrame:
+    @classmethod
+    def sync_pair(
+        cls, cips_json: str, cips_excel: str, pcm_json: str, pcm_excel: str
+    ) -> dict:
+        """Sync one CIPS / PCM pair of normalized files in place.
+
+        Steps 1-4 of ``sync`` for a single segment: the decision is made on
+        the JSON files, and a reversed survey is recalculated on its Excel,
+        whose rebuilt JSON replaces the original. The files of a reversed
+        survey are written via temporary files and only moved over the
+        originals once every write succeeded. Surveys already in order are
+        not rewritten, and their Excel is not read.
+
+        Args:
+            cips_json (str): Normalized CIPS JSON (``CIPS.normalize``).
+            cips_excel (str): Normalized CIPS Excel next to it.
+            pcm_json (str): Normalized PCM JSON (``PCM.normalize``).
+            pcm_excel (str): Normalized PCM Excel next to it.
+
+        Returns:
+            dict: ``cips_axis`` (``"west-east"`` / ``"north-south"``),
+                ``cips_reversed``, ``pcm_reversed`` and ``start_gap_m``
+                (meters between the CIPS and PCM start ends after syncing).
+
+        Raises:
+            FileNotFoundError: If a JSON file, or the Excel of a survey to
+                reverse, does not exist.
+            ValueError: If a file has no records or misses the keys/columns
+                sync uses.
+            _WriteError: If a write failed; the files are left untouched.
+
+        Example:
+            >>> SyncData.sync_pair(
+            ...     cips.normalize_json_filepath, cips.normalize_excel_filepath,
+            ...     pcm.normalize_json_filepath, pcm.normalize_excel_filepath,
+            ... )
+            {'cips_axis': 'west-east', 'cips_reversed': True, ...}
+        """
+        cips = cls._read_json(cips_json, "cips")
+        pcm = cls._read_json(pcm_json, "pcm")
+
+        # 1-2. CIPS starts by the main direction of its line.
+        cips_first, cips_last = cls.ends(cips, *cls.COORDINATES["cips"])
+        axis, cips_reverse = cls.cips_direction(cips_first, cips_last)
+
+        # 3. PCM starts at the end closer to the (synced) CIPS start.
+        start = cips_last if cips_reverse else cips_first
+        pcm_first, pcm_last = cls.ends(pcm, *cls.COORDINATES["pcm"])
+        to_first = _distance(start, pcm_first)
+        to_last = _distance(start, pcm_last)
+        pcm_reverse = to_last < to_first
+
+        # 4. Read and reverse every file to change.
+        writes: list[tuple[str, pd.DataFrame, str]] = []
+        for kind, json_path, excel_path, reverse in (
+            ("cips", cips_json, cips_excel, cips_reverse),
+            ("pcm", pcm_json, pcm_excel, pcm_reverse),
+        ):
+            if not reverse:
+                continue
+            excel = cls._reverse(cls._read_excel(excel_path, kind), kind)
+            writes.append((excel_path, excel, "excel"))
+            # The JSON is rebuilt from the recalculated Excel.
+            writes.append((json_path, cls.SURVEYS[kind].json_frame(excel), "json"))
+
+        try:
+            cls._write_all(writes)
+        except Exception as e:
+            raise _WriteError(f"{type(e).__name__}: {e}") from e
+
+        return {
+            "cips_axis": axis,
+            "cips_reversed": cips_reverse,
+            "pcm_reversed": pcm_reverse,
+            "start_gap_m": round(min(to_first, to_last), 2),
+        }
+
+    @classmethod
+    def _read_json(cls, path: str, kind: str) -> pd.DataFrame:
         """Read a normalized JSON file and check it has the keys sync uses.
 
         Raises:
@@ -432,7 +489,7 @@ class SyncData:
         if not records:
             raise ValueError(f"No records in {path}")
 
-        missing = [key for key in self.COORDINATES[kind] if key not in records[0]]
+        missing = [key for key in cls.COORDINATES[kind] if key not in records[0]]
         if missing:
             raise ValueError(
                 f"{path} misses keys {missing}; normalize it again (main.py)"
@@ -441,7 +498,8 @@ class SyncData:
         # JSON types and the key order is preserved.
         return pd.DataFrame(records)
 
-    def _read_excel(self, path: str, kind: str) -> pd.DataFrame:
+    @classmethod
+    def _read_excel(cls, path: str, kind: str) -> pd.DataFrame:
         """Read a normalized Excel file and check it has the columns sync uses.
 
         Raises:
@@ -458,7 +516,7 @@ class SyncData:
         if df.empty:
             raise ValueError(f"No rows in {path}")
 
-        required = self.EXCEL_REQUIRED_COLUMNS[kind]
+        required = cls.EXCEL_REQUIRED_COLUMNS[kind]
         missing = [c for c in required if c not in df.columns]
         if missing:
             raise ValueError(
@@ -466,7 +524,8 @@ class SyncData:
             )
         return df
 
-    def _reverse(self, df: pd.DataFrame, kind: str) -> pd.DataFrame:
+    @classmethod
+    def _reverse(cls, df: pd.DataFrame, kind: str) -> pd.DataFrame:
         """Reverse a normalized Excel and recompute the order-dependent values.
 
         Args:
@@ -474,9 +533,9 @@ class SyncData:
             kind (str): ``"cips"`` or ``"pcm"``.
         """
         df = df.iloc[::-1].reset_index(drop=True)
-        columns = self.EXCEL_COLUMNS
+        columns = cls.EXCEL_COLUMNS
 
-        lat_key, lon_key = self.EXCEL_COORDINATES[kind]
+        lat_key, lon_key = cls.EXCEL_COORDINATES[kind]
         lat, lon = df[lat_key], df[lon_key]
         distance = pd.Series(
             calculate_distance(lat.shift(), lon.shift(), lat, lon), index=df.index
@@ -535,6 +594,102 @@ class SyncData:
             df.to_json(path, orient="records")
         else:
             df.to_excel(path, index=False)
+
+
+def sync_files(
+    cips: str,
+    pcm: str,
+    year: int,
+    acvg_dcvg: str | None = None,
+    output_dir: str | None = None,
+    verbose: bool = False,
+) -> dict:
+    """Normalize and sync one segment's CIPS, PCM and ACVG/DCVG Excel files.
+
+    The single-segment version of the ``main.py`` flow, without an index:
+
+    1. ``CIPS(cips).clean().normalize()`` and ``PCM(pcm).clean().normalize()``
+       write the normalized Excel and JSON under
+       ``<output_dir>/normalize/<cips|pcm>/``.
+    2. ``SyncData.sync_pair`` puts both in the same direction, in place
+       (CIPS starts west / north, PCM starts at the end closer to it).
+    3. If ``acvg_dcvg`` is given, ``AcvgDcvgFile(acvg_dcvg).clean()
+       .normalize(<synced CIPS JSON>)`` places every anomaly on the synced
+       CIPS line (``real_distance``, ``closest_cips_condition``) under
+       ``<output_dir>/normalize/acvg_dcvg/``.
+
+    Nothing is written to ``cleaned/``. Running it again rebuilds the same
+    files.
+
+    Args:
+        cips (str): Source CIPS Excel (any layout ``CIPS`` reads; the
+            filename must name ``ICCP`` / ``SACP`` when the columns don't).
+        pcm (str): Source PCM Excel.
+        year (int): Survey year; the output files are named
+            ``<year>-<slug>``.
+        acvg_dcvg (str | None): One segment's ACVG/DCVG anomalies: a sheet
+            with ``AcvgDcvg.REQUIRED_COLUMNS`` (as written by
+            ``AcvgDcvg.rebuild``). ``None`` skips step 3.
+        output_dir (str | None): Output root. Defaults to ``<cwd>/output``.
+        verbose (bool): If True, log progress. Defaults to ``False``.
+
+    Returns:
+        dict: ``cips_json``, ``pcm_json`` and ``acvg_dcvg_json`` (``None``
+            without ``acvg_dcvg``): paths of the normalized, synced JSON
+            files; plus ``cips_axis``, ``cips_reversed``, ``pcm_reversed``
+            and ``start_gap_m`` from ``SyncData.sync_pair``.
+
+    Raises:
+        FileNotFoundError: If an input file does not exist.
+        ValueError: If a file cannot be cleaned (e.g. no usable rows, or
+            ICCP/SACP cannot be told apart).
+        _WriteError: If the sync could not write; the normalized CIPS / PCM
+            files keep their survey order.
+
+    Example:
+        >>> result = sync_files(
+        ...     "CIPS - ICCP Seg A.xlsx", "PCM Seg A.xlsx", year=2024,
+        ...     acvg_dcvg="acvg-dcvg-seg-a-8-jakarta.xlsx",
+        ... )
+        >>> result["cips_json"], result["pcm_json"], result["acvg_dcvg_json"]
+    """
+    cips_data = CIPS(cips, year, output_dir, verbose).clean().normalize()
+    pcm_data = PCM(pcm, year, output_dir, verbose).clean().normalize()
+
+    result = SyncData.sync_pair(
+        cips_data.normalize_json_filepath,
+        cips_data.normalize_excel_filepath,
+        pcm_data.normalize_json_filepath,
+        pcm_data.normalize_excel_filepath,
+    )
+
+    acvg_json = None
+    if acvg_dcvg is not None:
+        # After the sync, so real_distance follows the synced CIPS.
+        acvg_data = (
+            AcvgDcvgFile(acvg_dcvg, year, output_dir, verbose)
+            .clean()
+            .normalize(cips_data.normalize_json_filepath)
+        )
+        acvg_json = acvg_data.normalize_json_filepath
+
+    if verbose:
+        logger.info(
+            f"Synced {cips} / {pcm}: reversed CIPS={result['cips_reversed']} "
+            f"({result['cips_axis']}) PCM={result['pcm_reversed']}, "
+            f"ACVG/DCVG: {acvg_json}"
+        )
+
+    return {
+        "cips_json": cips_data.normalize_json_filepath,
+        "pcm_json": pcm_data.normalize_json_filepath,
+        "acvg_dcvg_json": acvg_json,
+        **result,
+    }
+
+
+class _WriteError(Exception):
+    """A write of ``SyncData.sync_pair`` failed; the files were left untouched."""
 
 
 def _distance(a: Point, b: Point) -> float:

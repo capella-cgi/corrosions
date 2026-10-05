@@ -33,6 +33,7 @@ uv run python -m corrosions  # run against the current source tree
 | Page | What you'll find |
 | --- | --- |
 | [Home](Home.md) | This page — overview and directory of the wiki. |
+| [Normalizing Data](Normalizing-Data.md) | How to normalize one CIPS, PCM or ACVG/DCVG file (`clean().check().save().normalize()`), with example input, Excel, JSON and `report` output. |
 | [API Reference](API-Reference.md) | Every public class, method, and helper in the `corrosions` package, grouped by module. |
 
 ## Package layout at a glance
@@ -41,10 +42,10 @@ uv run python -m corrosions  # run against the current source tree
 src/corrosions/
 ├── __init__.py         # package metadata (__version__, __author__, …)
 ├── logging.py          # loguru-based logging setup and helpers
-├── sync.py             # SyncData: same survey direction for CIPS and PCM
+├── sync.py             # SyncData: same survey direction for CIPS and PCM; sync_files: one segment from Excel
 ├── data/
 │   ├── file_index.py   # FileIndex: Excel index of CIPS/PCM files
-│   ├── base_data.py    # BaseData: fluent check().clean().save() pipeline, report, normalize paths
+│   ├── base_data.py    # BaseData: fluent clean().check().save().normalize() pipeline, report, normalize paths
 │   ├── pcm.py          # PCM(BaseData): single PCM survey file
 │   ├── cips.py         # CIPS(BaseData): single CIPS survey file
 │   └── acvg_dcvg.py    # AcvgDcvg: anomalies per segment; AcvgDcvgFile(BaseData): clean/normalize

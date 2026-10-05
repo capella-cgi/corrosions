@@ -83,12 +83,12 @@ def test_pcm_clean_raises_when_empty(tmp_path):
 
 def test_pcm_full_chain(pcm_file, tmp_path):
     out = tmp_path / "out"
-    pcm = PCM(pcm_file, year=2024, output_dir=str(out)).check().clean().save()
+    pcm = PCM(pcm_file, year=2024, output_dir=str(out)).clean().check().save()
     expected = os.path.join(str(out), "cleaned", "2024", "PCM", "segment-01.xlsx")
     assert pcm.cleaned_path == expected
     assert os.path.isfile(expected)
     assert len(pd.read_excel(expected)) == 2
-    assert pcm.report["n_duplicates"] == 2
+    assert pcm.report["n_duplicates"] == 0  # checked after clean()
 
 
 def _cips_base() -> dict:
@@ -143,7 +143,7 @@ def test_cips_full_chain(tmp_path):
         tmp_path / "iccp.xlsx",
         {**_cips_base(), "On Voltage": [-1.1, -1.2, -1.3], "Off Voltage": [0, 0, 0]},
     )
-    cips = CIPS(path, year=2024, output_dir=str(out)).check().clean().save()
+    cips = CIPS(path, year=2024, output_dir=str(out)).clean().check().save()
     assert cips.report["is_valid"] is True
     assert cips.cleaned_path == os.path.join(
         str(out), "cleaned", "2024", "CIPS", "iccp.xlsx"
@@ -230,10 +230,9 @@ def _cips_2022(**extra) -> dict:
     return data
 
 
-def test_cips_fix_renames_and_adds_comment(tmp_path):
+def test_cips_load_renames_and_adds_comment(tmp_path):
     path = _write_excel(tmp_path / "CIPS - ICCP 2022.xlsx", _cips_2022())
     cips = CIPS(path, year=2022, output_dir=str(tmp_path / "out"))
-    assert cips.fix() is cips
     cols = list(cips.df.columns)
     assert "Index" in cols and "Data No" not in cols  # Index is not renamed
     assert "Voltage" in cols and "Off Voltage" in cols
@@ -242,10 +241,9 @@ def test_cips_fix_renames_and_adds_comment(tmp_path):
     assert cips.check().report["is_valid"] is True
 
 
-def test_cips_fix_runs_for_every_year(tmp_path):
+def test_cips_columns_fixed_for_every_year(tmp_path):
     path = _write_excel(tmp_path / "CIPS - ICCP 2021.xlsx", _cips_2022())
-    cips = CIPS(path, year=2021, output_dir=str(tmp_path / "out")).fix()
-    assert cips.fixed is True
+    cips = CIPS(path, year=2021, output_dir=str(tmp_path / "out"))
     assert "Voltage" in cips.df.columns
     assert (cips.df["Comment"] == "").all()
 
@@ -318,7 +316,7 @@ def test_cips_valid_without_data_no_and_altitude(tmp_path):
     data = {**_cips_base(), "Voltage": [-0.9, -1.0, -1.1]}
     del data["Data No"], data["Altitude"]
     path = _write_excel(tmp_path / "CIPS - SACP minimal.xlsx", data)
-    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).fix().check()
+    cips = CIPS(path, year=2025, output_dir=str(tmp_path / "out")).clean().check()
     assert "Data No" not in cips.df.columns
     assert "Altitude" not in cips.df.columns
     assert cips.report["is_valid"] is True
@@ -446,10 +444,10 @@ def test_cips_normalize_before_clean_raises(tmp_path):
         CIPS(path, year=2024, output_dir=str(tmp_path / "out")).normalize()
 
 
-def test_cips_normalize_after_fix_only_raises(tmp_path):
-    # fix() alone does not run _fix_voltage, so a SACP file has no Off Voltage
+def test_cips_normalize_after_check_only_raises(tmp_path):
+    # check() does not run _fix_voltage, so a SACP file has no Off Voltage
     path = _write_excel(tmp_path / "CIPS - SACP fixed.xlsx", _cips_track([-6.1, -6.101]))
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix()
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).check()
     assert cips.cleaned is False
     with pytest.raises(RuntimeError, match="Run clean"):
         cips.normalize()
@@ -504,10 +502,10 @@ def test_cips_normalize_updates_report(tmp_path):
     data = _cips_track([-6.1, -6.101, -6.102])
     data["Voltage"] = [-0.80, -0.9, -1.0]
     path = _write_excel(tmp_path / "CIPS - SACP report.xlsx", data)
-    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).fix().check()
+    cips = CIPS(path, year=2024, output_dir=str(tmp_path / "out")).clean().check()
     assert "normalized" not in cips.report
 
-    cips.clean().normalize()
+    cips.normalize()
     report = cips.report
     assert report["is_valid"] is True  # check keys are kept
     assert report["normalized"] is True
@@ -659,7 +657,7 @@ def test_pcm_normalize_current_loss_and_condition(tmp_path):
 
 def test_pcm_normalize_updates_report(tmp_path):
     path = _write_excel(tmp_path / "PCM report.xlsx", _pcm_track([0.5, 0.45, 0.2]))
-    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().save().check()
+    pcm = PCM(path, year=2025, output_dir=str(tmp_path / "out")).clean().check().save()
     pcm.normalize()
     report = pcm.report
     assert report["n_duplicates"] == 0  # check keys are kept
