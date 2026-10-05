@@ -14,7 +14,7 @@ guide with example output, see [Normalizing Data](Normalizing-Data.md).
 - [`corrosions.utils.dataframe_utils`](#corrosionsutilsdataframe_utils) — Excel sheet helpers
 - [`corrosions.utils.path_utils`](#corrosionsutilspath_utils) — path helpers
 - [`corrosions.utils.geo_utils`](#corrosionsutilsgeo_utils) — distance between coordinates
-- [`corrosions.sync`](#corrosionssync) — `SyncData`: same survey direction for CIPS and PCM
+- [`corrosions.sync`](#corrosionssync) — `SyncData`: same survey direction for CIPS and PCM; `sync_files`: normalize + sync one segment from its Excel files
 - [`corrosions.data.acvg_dcvg`](#corrosionsdataacvg_dcvg) — `AcvgDcvg`: ACVG/DCVG anomalies per segment; `AcvgDcvgFile`: clean / normalize one segment file
 
 ---
@@ -1069,6 +1069,23 @@ Return the main direction of a CIPS line (`"west-east"` or
 `"north-south"`, west-east on a tie) and whether it must be reversed to start
 at `START[axis]`.
 
+#### `sync_pair(cips_json, cips_excel, pcm_json, pcm_excel) -> dict` *(classmethod)*
+
+Sync one CIPS / PCM pair of normalized files in place, without an index:
+the same decision, recalculation and safe writes as `sync()` for one
+segment (`sync()` calls it for every record). Returns `cips_axis`,
+`cips_reversed`, `pcm_reversed` and `start_gap_m`. Raises
+`FileNotFoundError` / `ValueError` for a missing or unusable file, and an
+error for a failed write; the files are then left untouched.
+
+```python
+SyncData.sync_pair(
+    cips.normalize_json_filepath, cips.normalize_excel_filepath,
+    pcm.normalize_json_filepath, pcm.normalize_excel_filepath,
+)
+# {'cips_axis': 'west-east', 'cips_reversed': True, 'pcm_reversed': True, 'start_gap_m': 0.0}
+```
+
 #### `sync() -> pd.DataFrame`
 
 Sync every segment and return one report row per index record
@@ -1100,6 +1117,65 @@ from corrosions.sync import SyncData
 report = SyncData("output/file_index.json", n_jobs=8, verbose=True).sync()
 report[report["start_gap_m"] > 200]   # CIPS/PCM pairs that do not line up
 ```
+
+### `sync_files(cips, pcm, year, acvg_dcvg=None, output_dir=None, verbose=False) -> dict`
+
+Normalize and sync **one segment** given as source Excel files, without an
+index (the single-segment version of the `main.py` flow):
+
+1. `CIPS(cips, year).clean().normalize()` and
+   `PCM(pcm, year).clean().normalize()` write the normalized Excel and JSON
+   under `<output_dir>/normalize/<cips|pcm>/`.
+2. [`SyncData.sync_pair`](#sync_paircips_json-cips_excel-pcm_json-pcm_excel---dict-classmethod)
+   puts both in the same direction, in place.
+3. If `acvg_dcvg` is given,
+   [`AcvgDcvgFile(acvg_dcvg, year).clean().normalize(<synced CIPS JSON>)`](#class-acvgdcvgfilebasedata)
+   places every anomaly on the synced CIPS line (`real_distance`,
+   `closest_cips_condition`) under `<output_dir>/normalize/acvg_dcvg/`.
+
+| Argument | Description |
+| --- | --- |
+| `cips` | Source CIPS Excel (any layout `CIPS` reads; the filename must name `ICCP` / `SACP` when the columns don't). |
+| `pcm` | Source PCM Excel. |
+| `year` | Survey year; output files are named `<year>-<slug>`. |
+| `acvg_dcvg` | Optional: one segment's anomalies, a sheet with `AcvgDcvg.REQUIRED_COLUMNS` (like `AcvgDcvg.rebuild()` writes). `None` skips step 3. |
+| `output_dir` | Output root; defaults to `<cwd>/output`. |
+| `verbose` | Log a summary. |
+
+Returns the paths of the three normalized, synced JSON files
+(`cips_json`, `pcm_json`, `acvg_dcvg_json`, the last `None` without
+`acvg_dcvg`) plus the `sync_pair` result. Nothing is written to `cleaned/`;
+running it again rebuilds the same files. Raises `FileNotFoundError` for a
+missing input, `ValueError` when a file cannot be cleaned, and an error when
+the sync cannot write.
+
+```python
+from corrosions.sync import sync_files
+
+result = sync_files(
+    "CIPS - ICCP Demo Segment.xlsx",          # source CIPS
+    "PCM Demo Segment Reversed.xlsx",         # source PCM, walked the other way
+    2024,
+    acvg_dcvg="acvg-dcvg-demo-segment-8-jakarta.xlsx",   # optional
+    output_dir="output",
+)
+```
+
+```python
+{
+    "cips_json": "output/normalize/cips/json/2024-cips-iccp-demo-segment.json",
+    "pcm_json": "output/normalize/pcm/json/2024-pcm-demo-segment-reversed.json",
+    "acvg_dcvg_json": "output/normalize/acvg_dcvg/json/2024-acvg-dcvg-demo-segment-8-jakarta.json",
+    "cips_axis": "north-south",
+    "cips_reversed": False,    # the CIPS already starts at the north end
+    "pcm_reversed": True,      # the PCM now starts there too
+    "start_gap_m": 50.34,
+}
+```
+
+The JSON files have the same keys as the normalized files
+([Normalizing Data](Normalizing-Data.md#sync-one-segment-from-its-excel-files)
+shows them).
 
 ---
 

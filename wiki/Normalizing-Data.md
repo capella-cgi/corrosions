@@ -32,6 +32,7 @@ apart). Distances are in meters.
 - [CIPS](#cips)
 - [PCM](#pcm)
 - [ACVG/DCVG](#acvgdcvg)
+- [Sync one segment from its Excel files](#sync-one-segment-from-its-excel-files)
 - [Whole index](#whole-index)
 
 ---
@@ -395,6 +396,97 @@ English keys, `Segmen` left out (the file is one segment).
     "cips_json": ".../normalize/cips/json/2024-cips-iccp-demo-segment.json",
 }
 ```
+
+---
+
+## Sync one segment from its Excel files
+
+`sync_files` runs the three sections above for one segment and puts the CIPS
+and PCM in the same direction before the ACVG/DCVG step, so the anomalies'
+`real_distance` follows the synced CIPS:
+
+1. normalize the CIPS and PCM (`clean().normalize()`);
+2. sync them in place: the CIPS starts at its west end (west-east line) or
+   north end (north-south line), the PCM at the end closer to the CIPS
+   start; a reversed survey gets its distances (and PCM loss rate /
+   condition) recalculated;
+3. if an ACVG/DCVG file is given, normalize it on the synced CIPS JSON.
+
+Example with the demo CIPS and PCM above, but the PCM walked south to north
+(rows in reverse order):
+
+```python
+from corrosions.sync import sync_files
+
+result = sync_files(
+    "CIPS - ICCP Demo Segment.xlsx",          # source CIPS
+    "PCM Demo Segment Reversed.xlsx",         # source PCM, walked the other way
+    2024,
+    acvg_dcvg="acvg-dcvg-demo-segment-8-jakarta.xlsx",   # optional
+    output_dir="output",
+)
+```
+
+```python
+{
+    "cips_json": "output/normalize/cips/json/2024-cips-iccp-demo-segment.json",
+    "pcm_json": "output/normalize/pcm/json/2024-pcm-demo-segment-reversed.json",
+    "acvg_dcvg_json": "output/normalize/acvg_dcvg/json/2024-acvg-dcvg-demo-segment-8-jakarta.json",
+    "cips_axis": "north-south",
+    "cips_reversed": False,    # the CIPS already starts at the north end
+    "pcm_reversed": True,      # the PCM now starts there too
+    "start_gap_m": 50.34,
+}
+```
+
+The demo CIPS line runs north-south (0.0027° of latitude, 0.0003° of
+longitude) and already starts at the north end, so only the PCM is
+reversed. `start_gap_m` is the distance between the two start ends (each the
+mean of up to 5 end readings).
+
+### Output: CIPS JSON (synced)
+
+Unchanged, the same as in [CIPS](#cips):
+
+```json
+[
+  {"voltage": -1.1, "off_voltage": -0.9, "latitude": -6.2, "longitude": 106.8, "real_distance": 0.0, "condition": "PROTECTED", "comment": null, "dcp_feature_dcvg_anomaly": "Test Post TP-01"},
+  {"voltage": -0.95, "off_voltage": -0.86, "latitude": -6.2009, "longitude": 106.8001, "real_distance": 100.6841260516, "condition": "PROTECTED", "comment": null, "dcp_feature_dcvg_anomaly": null},
+  {"voltage": -1.25, "off_voltage": -1.21, "latitude": -6.2018, "longitude": 106.8002, "real_distance": 201.3682500319, "condition": "OVER PROTECTED", "comment": null, "dcp_feature_dcvg_anomaly": "Road crossing"},
+  {"voltage": -0.7, "off_voltage": -0.8, "latitude": -6.2027, "longitude": 106.8003, "real_distance": 302.0523719402, "condition": "UNPROTECTED", "comment": null, "dcp_feature_dcvg_anomaly": null}
+]
+```
+
+### Output: PCM JSON (synced)
+
+Reversed to start at the north end like the CIPS; `real_distance`,
+`current_loss_rate` and `condition` are recalculated. (The first reading has
+no comment: in the reversed source, the duplicate of the `Start` reading
+comes first, and `clean()` keeps the first of two duplicates.)
+
+```json
+[
+  {"latitude": -6.2, "longitude": 106.8, "real_distance": 0.0, "4hz_current_a": 0.52, "dbma": 54.32, "current_loss_rate": 0.0, "depth_m": 1.2, "condition": "Medium to High", "comment_0_100": null},
+  {"latitude": -6.2009, "longitude": 106.8001, "real_distance": 100.6841260516, "4hz_current_a": 0.515, "dbma": 54.24, "current_loss_rate": 0.79, "depth_m": 1.3, "condition": "Medium to High", "comment_0_100": null},
+  {"latitude": -6.2027, "longitude": 106.8003, "real_distance": 302.0523719402, "4hz_current_a": 0.476, "dbma": 53.55, "current_loss_rate": 3.43, "depth_m": 1.3, "condition": "Medium to High", "comment_0_100": "End"}
+]
+```
+
+### Output: ACVG/DCVG JSON
+
+Each anomaly takes `real_distance` and `closest_cips_condition` from the
+nearest reading of the synced CIPS:
+
+```json
+[
+  {"latitude": -6.20005, "longitude": 106.80001, "real_distance": 0.0, "anomaly_location": "Jl. Demo 2", "surface_condition": "Aspal", "diameter": 8, "on_potential": -1.05, "off_potential": -0.88, "ir_drop": 18.0, "result_acvg": 38, "pipe_depth": 1.2, "drop_pcm": 8.1, "survey_dcvg": "2024-05-21", "survey_acvg": "2024-05-19", "closest_cips_condition": "PROTECTED"},
+  {"latitude": -6.20185, "longitude": 106.80021, "real_distance": 201.3682500319, "anomaly_location": "Jl. Demo 1", "surface_condition": "Tanah", "diameter": 8, "on_potential": -1.21, "off_potential": -0.95, "ir_drop": 32.5, "result_acvg": 45, "pipe_depth": 1.5, "drop_pcm": 12.3, "survey_dcvg": "2024-05-20", "survey_acvg": "2024-05-18", "closest_cips_condition": "OVER PROTECTED"}
+]
+```
+
+The normalized Excel files are written and synced next to the JSON
+(`.../excel/<year>-<slug>.xlsx`). Without `acvg_dcvg`, `acvg_dcvg_json` is
+`None` and nothing is written under `normalize/acvg_dcvg/`.
 
 ---
 

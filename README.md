@@ -196,6 +196,37 @@ acvg.assign_index()
 fi.assign_acvg_dcvg(acvg.normalized_files(), counts=acvg.anomaly_counts())  # acvg_dcvg_normalized_file + total_anomaly in file_index.json
 ```
 
+### One segment from its Excel files: `sync_files`
+
+Without an index, `sync_files` normalizes one segment's CIPS and PCM, puts
+them in the same direction (like the pipeline's sync) and, if an ACVG/DCVG
+file is given, normalizes its anomalies on the synced CIPS line:
+
+```python
+from corrosions.sync import sync_files
+
+result = sync_files(
+    "CIPS - ICCP Demo Segment.xlsx",
+    "PCM Demo Segment Reversed.xlsx",
+    2024,
+    acvg_dcvg="acvg-dcvg-demo-segment-8-jakarta.xlsx",   # optional
+    output_dir="output",
+)
+# {
+#     "cips_json": "output/normalize/cips/json/2024-cips-iccp-demo-segment.json",
+#     "pcm_json": "output/normalize/pcm/json/2024-pcm-demo-segment-reversed.json",
+#     "acvg_dcvg_json": "output/normalize/acvg_dcvg/json/2024-acvg-dcvg-demo-segment-8-jakarta.json",
+#     "cips_axis": "north-south", "cips_reversed": False, "pcm_reversed": True, "start_gap_m": 50.34,
+# }
+```
+
+The three JSON files are the normalized CIPS and PCM after the sync and the
+ACVG/DCVG anomalies with `real_distance` and `closest_cips_condition`
+(`acvg_dcvg_json` is `None` without an ACVG/DCVG file). The ACVG/DCVG file
+is one segment's anomalies with the columns listed in
+[Input files](#input-files) (like the `raw_data/<year>/ACVG_DCVG/` files).
+Example output: [wiki/Normalizing-Data.md](wiki/Normalizing-Data.md#sync-one-segment-from-its-excel-files).
+
 ### Normalizing one file
 
 CIPS, PCM and ACVG/DCVG use the same chain:
