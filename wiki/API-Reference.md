@@ -510,7 +510,7 @@ report, so call it before `normalize()`):
 | `n_normalized` | `int` | Rows in the normalized files. |
 | `normalize_excel_filepath` / `normalize_json_filepath` | `str` | Files written. |
 | `protection` | `str` | CIPS: `"ICCP"` or `"SACP"`. |
-| `length_m` | `float` | CIPS, PCM: last `Real Distance` (survey length in meters, 2 decimals). |
+| `length_km` | `float` | CIPS, PCM: last `Real Distance` in km (survey length, 3 decimals, like `pipe_length`). |
 | `protected_percentage` / `unprotected_percentage` | `float` | CIPS: same as the attributes. |
 | `medium_to_high_percentage` / `medium_to_poor_percentage` | `float` | PCM: same as the attributes. |
 | `count` | `int` | ACVG/DCVG: number of anomalies (`AcvgDcvgFile.count`). |
@@ -596,7 +596,7 @@ It also sets `medium_to_high_percentage` (share of `Medium to High`
 readings, in percent, rounded to 2 decimals) and `medium_to_poor_percentage`
 (`100 -` that). Both are `0.0` before `normalize()`. Reversing the survey
 (`SyncData`) keeps the same reading pairs, so it does not change them.
-`report` gets the normalize keys (`length_m`, the two percentages, …; see
+`report` gets the normalize keys (`length_km`, the two percentages, …; see
 [`check()`](#check---self)).
 
 "Previous" means the row above: the index is not used, so the gaps `clean()`
@@ -615,7 +615,7 @@ for steps of 10 m or more.
 pcm = PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize()
 pcm.df["Condition"].value_counts()
 pcm.normalize_json_filepath   # "output/normalize/pcm/json/2025-segment-01.json"
-pcm.report["length_m"], pcm.report["medium_to_high_percentage"]
+pcm.report["length_km"], pcm.report["medium_to_high_percentage"]
 
 # another folder: D:/tmp/pcm/excel/... and D:/tmp/pcm/json/...
 PCM("data/2025/PCM/segment-01.xlsx", year=2025).clean().normalize(normalize_dir="D:/tmp/pcm")
@@ -742,7 +742,7 @@ It also sets `protected_percentage` (share of readings that are `PROTECTED`
 or `OVER PROTECTED`, in percent, rounded to 2 decimals) and
 `unprotected_percentage` (`100 - protected_percentage`, the `UNPROTECTED`
 share). Both are `0.0` before `normalize()`. `report` gets the normalize
-keys (`protection`, `length_m`, the two percentages, …; see
+keys (`protection`, `length_km`, the two percentages, …; see
 [`check()`](#check---self)).
 
 | File | Content |
@@ -765,7 +765,7 @@ enough, because `clean()` is what sets `protection` and the voltage columns
 cips = CIPS("segment.xlsx", year=2024).clean().normalize()
 cips.df["Real Distance"].iloc[-1]   # survey length in meters
 cips.normalize_json_filepath        # "output/normalize/cips/json/2024-segment.json"
-cips.report["protected_percentage"] # also in report, with protection, length_m, …
+cips.report["protected_percentage"] # also in report, with protection, length_km, …
 
 # another folder: D:/tmp/cips/excel/... and D:/tmp/cips/json/...
 CIPS("segment.xlsx", year=2024).clean().normalize(normalize_dir="D:/tmp/cips")

@@ -330,8 +330,8 @@ class CIPS(BaseData):
         Then writes two files, sets ``self.normalized`` and adds to
         ``self.report`` (see ``BaseData._report_normalize``): ``normalized``,
         ``n_normalized``, ``normalize_excel_filepath``,
-        ``normalize_json_filepath``, ``protection``, ``length_m`` (last
-        ``Real Distance``, 2 decimals), ``protected_percentage`` and
+        ``normalize_json_filepath``, ``protection``, ``length_km`` (last
+        ``Real Distance`` in km, 3 decimals), ``protected_percentage`` and
         ``unprotected_percentage``. The files:
 
         - ``normalize_excel_filepath``
@@ -417,7 +417,7 @@ class CIPS(BaseData):
         self.normalized = True
         self._report_normalize(
             protection=self.protection,
-            length_m=round(float(self.df["Real Distance"].iloc[-1]), 2),
+            length_km=round(float(self.df["Real Distance"].iloc[-1]) / 1000, 3),
             protected_percentage=self.protected_percentage,
             unprotected_percentage=self.unprotected_percentage,
         )

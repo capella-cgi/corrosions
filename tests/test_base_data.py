@@ -515,7 +515,7 @@ def test_cips_normalize_updates_report(tmp_path):
     assert report["normalize_excel_filepath"] == cips.normalize_excel_filepath
     assert report["normalize_json_filepath"] == cips.normalize_json_filepath
     assert report["protection"] == "SACP"
-    assert report["length_m"] == pytest.approx(222.39, abs=1e-2)
+    assert report["length_km"] == 0.222  # 222.39 m
     assert (report["protected_percentage"], report["unprotected_percentage"]) == (
         66.67,
         33.33,
@@ -666,7 +666,7 @@ def test_pcm_normalize_updates_report(tmp_path):
     assert report["normalized"] is True
     assert report["n_normalized"] == 3
     assert report["normalize_json_filepath"] == pcm.normalize_json_filepath
-    assert report["length_m"] == pytest.approx(222.39, abs=1e-2)
+    assert report["length_km"] == 0.222  # 222.39 m
     assert report["medium_to_high_percentage"] == 66.67
     assert report["medium_to_poor_percentage"] == 33.33
 

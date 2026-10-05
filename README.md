@@ -229,14 +229,14 @@ cips.report["missing_columns"]
 | `n_normalized` | rows in the normalized files |
 | `normalize_excel_filepath` / `normalize_json_filepath` | the files written |
 | `protection` | CIPS: `ICCP` or `SACP` |
-| `length_m` | CIPS, PCM: survey length (last `Real Distance`, meters) |
+| `length_km` | CIPS, PCM: survey length (last `Real Distance`, in km, 3 decimals) |
 | `protected_percentage` / `unprotected_percentage` | CIPS: % of readings (over) protected / unprotected |
 | `medium_to_high_percentage` / `medium_to_poor_percentage` | PCM: % of readings per condition |
 | `count` / `n_on_cips` / `cips_json` | ACVG/DCVG: anomalies, anomalies placed on the CIPS line, CIPS JSON used |
 
 ```python
 cips = cips.clean().normalize()
-cips.report["protected_percentage"], cips.report["length_m"]
+cips.report["protected_percentage"], cips.report["length_km"]
 ```
 
 Every `normalize()` (`CIPS`, `PCM`, `AcvgDcvgFile`, and `AcvgDcvg`, which
