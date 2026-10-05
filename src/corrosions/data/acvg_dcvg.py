@@ -660,12 +660,14 @@ class AcvgDcvg:
     def clean(self) -> Self:
         """Clean every file ``rebuild`` wrote and save it.
 
-        Runs ``AcvgDcvgFile(path, year).check().clean().save()`` per file:
-        rows with an empty or ``0`` coordinate and duplicate points are
-        dropped, and the result goes to
+        Runs ``AcvgDcvgFile(path, year).clean().check().save()`` per file,
+        like ``FileIndex.check_cips_file`` / ``check_pcm_file``: rows with an
+        empty or ``0`` coordinate and duplicate points are dropped, the
+        result goes to
         ``<output_dir>/cleaned/<year>/ACVG_DCVG/<filename>`` (``output_dir``
-        as passed to ``rebuild``), next to the cleaned CIPS and PCM files. A
-        file that fails (e.g. no anomaly with coordinates) gets a ``reason``
+        as passed to ``rebuild``), next to the cleaned CIPS and PCM files, and
+        ``check`` reports on the cleaned data. A file that fails (e.g. no
+        anomaly with coordinates) gets a ``reason``
         and is left out of ``normalize``; the others go on.
 
         Returns:
@@ -674,7 +676,9 @@ class AcvgDcvg:
                 ``n_duplicates``, ``n_cleaned``, ``cleaned_path``,
                 ``cips_file``, ``normalized_file``, ``count``,
                 ``n_on_cips`` and ``reason`` (the last four are filled by
-                ``normalize``).
+                ``normalize``). ``n_duplicates`` comes from ``check`` after
+                cleaning, so it is 0; ``n_anomalies - n_cleaned`` is the
+                number of anomalies ``clean`` dropped.
 
         Raises:
             RuntimeError: If ``rebuild`` has not run yet.
@@ -701,7 +705,7 @@ class AcvgDcvg:
                     path, year, output_dir=self._output_dir, verbose=self.verbose
                 )
                 entry["n_anomalies"] = len(data.df)
-                data.check().clean().save()
+                data.clean().check().save()
                 entry.update(
                     {
                         "n_duplicates": data.report["n_duplicates"],
@@ -897,7 +901,7 @@ class AcvgDcvgFile(BaseData):
 
     Example:
         >>> data = AcvgDcvgFile("output/raw_data/2024/ACVG_DCVG/x.xlsx", year=2024)
-        >>> data.check().clean().save().normalize("output/normalize/cips/json/2024-y.json")
+        >>> data.clean().check().save().normalize("output/normalize/cips/json/2024-y.json")
     """
 
     KIND = "acvg_dcvg"

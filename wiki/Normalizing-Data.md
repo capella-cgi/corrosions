@@ -8,15 +8,15 @@ in [API Reference](API-Reference.md).
 Every type uses the same chain:
 
 ```python
-Data(path, year=...).clean().save().check().normalize(...)
+Data(path, year=...).clean().check().save().normalize(...)
 ```
 
 | Step | What it does |
 | --- | --- |
 | constructor | loads the data sheet and converts numeric columns (CIPS also renames `Voltage (V)` / `Off Voltage (V)` and adds an empty `Comment`) |
 | `clean()` | drops all-empty rows, rows with an empty or `0` coordinate, rows missing a required value, then duplicate coordinates (first kept); raises `ValueError` if nothing is left |
-| `save()` | optional: writes the cleaned copy to `output/cleaned/<year>/<KIND>/<filename>` |
 | `check()` | optional: stores a quality summary of the (cleaned) data on `report` |
+| `save()` | optional: writes the cleaned copy to `output/cleaned/<year>/<KIND>/<filename>` |
 | `normalize()` | adds distances and a condition, then writes Excel and JSON to `output/normalize/<kind>/<excel\|json>/<year>-<slug>.*`; raises `RuntimeError` before `clean()` |
 
 `<slug>` is the source filename without extension, slugified
@@ -45,8 +45,8 @@ from corrosions.data.cips import CIPS
 cips = (
     CIPS("output/raw_data/2024/CIPS/CIPS - ICCP Demo Segment.xlsx", year=2024)
     .clean()
-    .save()
     .check()
+    .save()
     .normalize()
 )
 cips.protection                 # "ICCP"
@@ -163,8 +163,8 @@ from corrosions.data.pcm import PCM
 pcm = (
     PCM("output/raw_data/2024/PCM/PCM Demo Segment.xlsx", year=2024)
     .clean()
-    .save()
     .check()
+    .save()
     .normalize()
 )
 pcm.medium_to_high_percentage   # 100.0
@@ -276,8 +276,8 @@ from corrosions.data.acvg_dcvg import AcvgDcvgFile
 acvg = (
     AcvgDcvgFile("output/raw_data/2024/ACVG_DCVG/acvg-dcvg-demo-segment-8-jakarta.xlsx", year=2024)
     .clean()
-    .save()
     .check()
+    .save()
     .normalize(cips.normalize_json_filepath)   # or None: no CIPS for this segment
 )
 acvg.count       # 2 anomalies
@@ -500,8 +500,8 @@ from corrosions.data.file_index import FileIndex
 
 fi = FileIndex("IDDA - PCM CIPS File List.xlsx", drop_columns=["Nomor Segment"], skip_years=[2021])
 fi.rebuild(source_dir=r"D:\Data\Data IDDA")            # output/raw_data/<year>/<CIPS|PCM>/
-fi.check_cips_file("output/raw_data", n_jobs=8)        # CIPS(...).clean().save().check(), then normalize()
-fi.check_pcm_file("output/raw_data", n_jobs=8)         # PCM(...).clean().save().check(), then normalize()
+fi.check_cips_file("output/raw_data", n_jobs=8)        # CIPS(...).clean().check().save(), then normalize()
+fi.check_pcm_file("output/raw_data", n_jobs=8)         # PCM(...).clean().check().save(), then normalize()
 fi.to_json(n_jobs=8)                                   # file_index.json + CIPS/PCM direction sync
 
 acvg = AcvgDcvg("IDDA - ACVG FIle List.xlsx", skip_years=[2021])
@@ -520,5 +520,6 @@ Differences from the single-file chains:
   `reason` (`clean failed: …` / `normalize failed: …`) in
   `checked-cips.xlsx`, `checked-pcm.xlsx` or the `files` sheet of
   `acvg-dcvg-report.xlsx`.
-- **ACVG/DCVG** batch runs `AcvgDcvgFile(...).check().clean().save()`, so
-  its `report` describes the file before cleaning.
+- **ACVG/DCVG** batch runs `AcvgDcvgFile(...).clean().check().save()`, like
+  CIPS and PCM; `n_anomalies - n_cleaned` in the `files` sheet is the number
+  of anomalies `clean()` dropped.

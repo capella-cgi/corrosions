@@ -177,8 +177,8 @@ from corrosions.data.pcm import PCM
 from corrosions.data.acvg_dcvg import AcvgDcvg
 
 # one file
-cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).clean().save().check().normalize()
-pcm = PCM("output/raw_data/2025/PCM/<file>.xlsx", year=2025).clean().save().check().normalize()
+cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).clean().check().save().normalize()
+pcm = PCM("output/raw_data/2025/PCM/<file>.xlsx", year=2025).clean().check().save().normalize()
 
 # the whole index (what main.py does)
 fi = FileIndex("IDDA - PCM CIPS File List.xlsx", drop_columns=["Nomor Segment"], skip_years=[2021])
@@ -232,21 +232,21 @@ Example output: [wiki/Normalizing-Data.md](wiki/Normalizing-Data.md#sync-one-seg
 CIPS, PCM and ACVG/DCVG use the same chain:
 
 ```python
-Data(path, year=...).clean().save().check().normalize(...)
+Data(path, year=...).clean().check().save().normalize(...)
 ```
 
 `clean()` drops empty rows, empty or `0` coordinates, rows missing a
-required value and duplicate coordinates; `save()` writes the cleaned copy
-to `output/cleaned/<year>/<KIND>/`; `check()` fills `report`;
+required value and duplicate coordinates; `check()` fills `report`;
+`save()` writes the cleaned copy to `output/cleaned/<year>/<KIND>/`;
 `normalize()` adds distances and a condition and writes
 `output/normalize/<cips|pcm|acvg_dcvg>/<excel|json>/<year>-<slug>.*`
 (`<slug>` = slugified source filename). `save()` and `check()` are optional.
 
 | Type | Chain | `normalize()` adds | JSON keys |
 | --- | --- | --- | --- |
-| CIPS | `CIPS(path, year).clean().save().check().normalize()` | `Distance`, `Real Distance` (m), `Condition`: `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`), `UNPROTECTED`; `V` = `Off Voltage` (ICCP) or `Voltage` (SACP) | `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly` |
-| PCM | `PCM(path, year).clean().save().check().normalize()` | `Distance`, `Real Distance`, `dbma` (`20*log10(A*1000)`), `Current Loss Rate` (dB/km vs previous reading), `Condition`: `Medium to High` (rate `<= 50`) / `Medium to Poor` | `latitude`, `longitude`, `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` |
-| ACVG/DCVG | `AcvgDcvgFile(path, year).clean().save().check().normalize(cips_json)` | from the nearest reading of the segment's normalized CIPS JSON (≤ 500 m): `Real Distance`, `Condition`; Excel also `CIPS Offset (m)`; sorted along the line | `latitude`, `longitude`, `real_distance`, `anomaly_location`, `surface_condition`, `diameter`, `on_potential`, `off_potential`, `ir_drop`, `result_acvg`, `pipe_depth`, `drop_pcm`, `survey_dcvg`, `survey_acvg` (`YYYY-MM-DD`), `closest_cips_condition` |
+| CIPS | `CIPS(path, year).clean().check().save().normalize()` | `Distance`, `Real Distance` (m), `Condition`: `PROTECTED` (`-1.2 < V <= -0.85`), `OVER PROTECTED` (`V <= -1.2`), `UNPROTECTED`; `V` = `Off Voltage` (ICCP) or `Voltage` (SACP) | `voltage`, `off_voltage`, `latitude`, `longitude`, `real_distance`, `condition`, `comment`, `dcp_feature_dcvg_anomaly` |
+| PCM | `PCM(path, year).clean().check().save().normalize()` | `Distance`, `Real Distance`, `dbma` (`20*log10(A*1000)`), `Current Loss Rate` (dB/km vs previous reading), `Condition`: `Medium to High` (rate `<= 50`) / `Medium to Poor` | `latitude`, `longitude`, `real_distance`, `4hz_current_a`, `dbma`, `current_loss_rate`, `depth_m`, `condition`, `comment_0_100` |
+| ACVG/DCVG | `AcvgDcvgFile(path, year).clean().check().save().normalize(cips_json)` | from the nearest reading of the segment's normalized CIPS JSON (≤ 500 m): `Real Distance`, `Condition`; Excel also `CIPS Offset (m)`; sorted along the line | `latitude`, `longitude`, `real_distance`, `anomaly_location`, `surface_condition`, `diameter`, `on_potential`, `off_potential`, `ir_drop`, `result_acvg`, `pipe_depth`, `drop_pcm`, `survey_dcvg`, `survey_acvg` (`YYYY-MM-DD`), `closest_cips_condition` |
 
 Example: a 4-reading ICCP CIPS file `CIPS - ICCP Demo Segment.xlsx` (2024)
 gives `output/normalize/cips/json/2024-cips-iccp-demo-segment.json`:
@@ -287,9 +287,11 @@ example (input, Excel, JSON and `report`) are in
 `check()` (on `CIPS`, `PCM` and `AcvgDcvgFile`) never raises: it stores a
 quality summary on `report` (a `dict`, empty until `check()` runs) and
 returns the object, so it chains like the other steps. It checks whatever
-`df` holds when it is called, so its place in the chain matters: CIPS and
-PCM check the cleaned data (`clean().save().check()` in `check_cips_file` /
-`check_pcm_file`), ACVG/DCVG checks the raw data (`check().clean().save()`).
+`df` holds when it is called, so its place in the chain matters: every
+batch step checks the cleaned data (`clean().check().save()` in
+`check_cips_file`, `check_pcm_file` and `AcvgDcvg.clean()`), so
+`n_duplicates` is 0 there. Call `check()` before `clean()` to inspect a raw
+file.
 
 ```python
 cips = CIPS("output/raw_data/2025/CIPS/<file>.xlsx", year=2025).check()

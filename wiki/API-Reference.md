@@ -226,10 +226,10 @@ Returns `self` for chaining.
 
 #### `check_pcm_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
-Run `PCM(...).clean().save().check()` on every referenced PCM file, in
+Run `PCM(...).clean().check().save()` on every referenced PCM file, in
 parallel via joblib's `loky` backend when `n_jobs > 1` (or `-1` for all
-cores). Each cleaned copy is written to `output/cleaned/<year>/PCM/`, and
-the report describes the cleaned data. Then [`normalize()`](#normalizenormalize_dirnone---self)
+cores). The report describes the cleaned data, and each cleaned copy is
+written to `output/cleaned/<year>/PCM/`. Then [`normalize()`](#normalizenormalize_dirnone---self)
 writes the normalized Excel/JSON under `<cwd>/output/normalize/pcm/`; a file
 that fails to normalize keeps its check columns.
 
@@ -257,12 +257,12 @@ Returns a DataFrame with one row per index entry and columns:
 
 #### `check_cips_file(data_dir: str, n_jobs: int = 1) -> pd.DataFrame`
 
-Run [`CIPS(...).clean().save().check()`](#corrosionsdatacips) on every
+Run [`CIPS(...).clean().check().save()`](#corrosionsdatacips) on every
 referenced CIPS file at `<data_dir>/<Year>/CIPS/<filename>`, in parallel via
 joblib's `loky` backend, like `check_pcm_file`. Loading locates the data
-sheet and aligns column names, `clean().save()` writes a cleaned copy to
-`<cwd>/output/cleaned/<year>/CIPS/`, and `check()` reports on the cleaned
-data. Then [`normalize()`](#normalizenormalize_dirnone---self-1) writes the
+sheet and aligns column names, `clean()` cleans it, `check()` reports on
+the cleaned data, and `save()` writes the cleaned copy to
+`<cwd>/output/cleaned/<year>/CIPS/`. Then [`normalize()`](#normalizenormalize_dirnone---self-1) writes the
 normalized Excel/JSON under `<cwd>/output/normalize/cips/`. A file that
 fails to clean gets no check columns, only `sheet_name`, `candidate_sheets`
 and a `clean failed:` reason.
@@ -417,7 +417,7 @@ Subclasses ([`PCM`](#corrosionsdatapcm), [`CIPS`](#corrosionsdatacips))
 declare their schema through class attributes and inherit a fluent pipeline:
 
 ```python
-PCM("data/2024/PCM/segment-01.xlsx", year=2024).check().clean().save()
+PCM("data/2024/PCM/segment-01.xlsx", year=2024).clean().check().save().normalize()
 ```
 
 Every pipeline method returns `self`, so steps can run in any order.
@@ -560,8 +560,8 @@ and adds `normalize()`. Example input and output: [Normalizing Data](Normalizing
 ```python
 from corrosions.data.pcm import PCM
 
-pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024).check().clean().save()
-pcm.report["is_valid"]   # quality of the raw data
+pcm = PCM("data/2024/PCM/segment-01.xlsx", year=2024).clean().check().save()
+pcm.report["is_valid"]   # quality of the cleaned data
 pcm.cleaned_path         # "output/cleaned/2024/PCM/segment-01.xlsx"
 ```
 
@@ -884,14 +884,17 @@ internal `_` match columns are left out. Raises `RuntimeError` before
 
 #### `clean() -> Self`
 
-Run [`AcvgDcvgFile`](#class-acvgdcvgfilebasedata)`(path, year).check().clean().save()`
-on every file `rebuild` wrote; the cleaned copy goes to
-`<output_dir>/cleaned/<year>/ACVG_DCVG/<filename>` (`output_dir` as given to
-`rebuild`), next to the cleaned CIPS and PCM. A failing file gets a `reason`
+Run [`AcvgDcvgFile`](#class-acvgdcvgfilebasedata)`(path, year).clean().check().save()`
+on every file `rebuild` wrote, like `check_cips_file` / `check_pcm_file`; the
+cleaned copy goes to `<output_dir>/cleaned/<year>/ACVG_DCVG/<filename>`
+(`output_dir` as given to `rebuild`), next to the cleaned CIPS and PCM, and
+`check()` reports on the cleaned data. A failing file gets a `reason`
 (`clean failed: …`) and the others go on. Sets `file_report`: `year`,
 `filename`, `n_anomalies`, `n_duplicates`, `n_cleaned`, `cleaned_path`,
-`cips_file`, `normalized_file`, `count`, `n_on_cips`, `reason`. Raises `RuntimeError`
-before `rebuild`.
+`cips_file`, `normalized_file`, `count`, `n_on_cips`, `reason`.
+`n_duplicates` is `0` (checked after cleaning); `n_anomalies - n_cleaned` is
+the number of anomalies `clean()` dropped. Raises `RuntimeError` before
+`rebuild`.
 
 #### `normalize(normalize_dir=None) -> Self`
 
@@ -945,7 +948,7 @@ writes to the same layout as `CIPS` and `PCM`. Example input and output:
 from corrosions.data.acvg_dcvg import AcvgDcvgFile
 
 data = AcvgDcvgFile("output/raw_data/2024/ACVG_DCVG/<file>.xlsx", year=2024)
-data.check().clean().save()      # output/cleaned/2024/ACVG_DCVG/<file>.xlsx
+data.clean().check().save()      # output/cleaned/2024/ACVG_DCVG/<file>.xlsx
 data.normalize("output/normalize/cips/json/2024-<cips slug>.json")
 ```
 

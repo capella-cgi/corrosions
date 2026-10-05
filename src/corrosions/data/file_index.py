@@ -461,9 +461,9 @@ class FileIndex:
     def check_pcm_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Check, clean, save and normalize every referenced PCM file.
 
-        Each file runs through ``PCM(...).clean().save().check()``, so the
-        cleaned copy is written under ``output/cleaned/<year>/PCM/`` and the
-        report describes the cleaned data. Then ``normalize()`` writes the
+        Each file runs through ``PCM(...).clean().check().save()``, so the
+        report describes the cleaned data and the cleaned copy is written
+        under ``output/cleaned/<year>/PCM/``. Then ``normalize()`` writes the
         normalized Excel/JSON under ``<cwd>/output/normalize/pcm/``; a file
         that fails to normalize keeps its check columns.
 
@@ -518,7 +518,7 @@ class FileIndex:
                 }
 
             try:
-                pcm = PCM(filepath, year=year).clean().save().check()
+                pcm = PCM(filepath, year=year).clean().check().save()
             except Exception as e:
                 return {
                     "year": year,
@@ -600,12 +600,12 @@ class FileIndex:
     def check_cips_file(self, data_dir: str, n_jobs: int = 1) -> pd.DataFrame:
         """Check, clean, save and normalize every referenced CIPS file.
 
-        Each file runs through ``CIPS(...).clean().save().check()``, like
+        Each file runs through ``CIPS(...).clean().check().save()``, like
         ``check_pcm_file``: the data sheet is located (CIPS workbooks are not
         uniform, see ``CIPS.find_sheet``) and its column names aligned while
-        loading, ``clean().save()`` writes a cleaned copy to
-        ``<cwd>/output/cleaned/<year>/CIPS/`` and ``check()`` reports on the
-        cleaned data. Then ``normalize()`` writes the normalized Excel/JSON
+        loading, ``clean()`` cleans it, ``check()`` reports on the cleaned
+        data and ``save()`` writes the cleaned copy to
+        ``<cwd>/output/cleaned/<year>/CIPS/``. Then ``normalize()`` writes the normalized Excel/JSON
         under ``<cwd>/output/normalize/cips/``. A file that fails to clean
         gets no check columns.
 
@@ -699,7 +699,7 @@ class FileIndex:
                 }
 
             try:
-                cips.clean().save().check()
+                cips.clean().check().save()
             except Exception as e:
                 return {
                     "year": year,

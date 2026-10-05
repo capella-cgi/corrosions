@@ -475,9 +475,10 @@ def test_file_clean_drops_unusable_rows(tmp_path):
         ],
     )
     data = AcvgDcvgFile(path, year=2024, output_dir=str(tmp_path / "out"))
-    data.check().clean().save()
+    assert data.check().report["n_duplicates"] == 2  # before clean()
+    data.clean().check().save()
 
-    assert data.report["n_duplicates"] == 2
+    assert data.report["n_duplicates"] == 0  # check() after clean()
     assert data.df["Longitude"].tolist() == [106.803, 106.801]
     assert data.cleaned_path == str(
         tmp_path / "out" / "cleaned" / "2024" / "ACVG_DCVG" / os.path.basename(path)
