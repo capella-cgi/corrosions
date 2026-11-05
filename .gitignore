@@ -41,3 +41,4 @@ tests/output/
 output*
 *.html
 *.xlsx
+*.kmz
