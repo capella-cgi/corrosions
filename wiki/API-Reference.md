@@ -3,7 +3,8 @@
 This page documents the public API of the `corrosions` package as of
 version **0.3.0**. It is organized by module. All symbols are importable from
 their fully qualified paths shown in each section. For a step-by-step
-guide with example output, see [Normalizing Data](Normalizing-Data.md).
+guide with example output, see [Normalizing Data](Normalizing-Data.md); for
+the columns each input file needs, see [Required Columns](Required-Columns.md).
 
 - [`corrosions`](#corrosions) — package metadata
 - [`corrosions.logging`](#corrosionslogging) — logging configuration

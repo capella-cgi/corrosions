@@ -59,6 +59,10 @@ Each ACVG/DCVG area sheet needs `Segmen`, `Lokasi Anomali`,
 Other paths can be given on the command line (`-i`, `-s`, `--acvg-index`,
 `--acvg-dir`).
 
+The columns each CIPS, PCM and ACVG/DCVG file needs (and what happens when
+one is missing) are listed in
+[wiki/Required-Columns.md](wiki/Required-Columns.md).
+
 ## Installation
 
 ```bash
